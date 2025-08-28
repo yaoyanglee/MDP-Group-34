@@ -5,9 +5,6 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
-import android.content.SharedPreferences;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -15,7 +12,6 @@ import android.util.AttributeSet;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
-import android.webkit.WebHistoryItem;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -54,13 +50,16 @@ public class GridMap extends View {
     private Paint imageLineConfirm = new Paint();
 
     private static Direction robotDirection = Direction.NONE;
+    //Robot Coords
     private static int[] curCoord = new int[]{-1, -1};
     private static ArrayList<int[]> obstacleCoords = new ArrayList<>();
     private static boolean autoUpdate = false;
     private static boolean canDrawRobot = false;
+    //Robot Status
+    private boolean robotSelected = false;
     private static boolean startCoordStatus = false;
     private static boolean setObstacleStatus = false;
-    private static boolean setObstacleDirection = false;
+    private static boolean setDirection = false;
 
     private static final String TAG = "GridMap";
     private static final int COL = 20;
@@ -285,8 +284,8 @@ public class GridMap extends View {
         isOutdoorArena=isOutdoor;
     }
 
-    public void setSetObstacleDirection(boolean status) {
-        setObstacleDirection = status;
+    public void setSetDirection(boolean status) {
+        setDirection = status;
     }
 
     public void setSetObstacleStatus(boolean status) {
@@ -324,10 +323,13 @@ public class GridMap extends View {
     }
 
     public void updateCurCoord(int mapX, int mapY, Direction direction){
+        // Clamp the center coordinates so robot never goes out of bounds
+        mapX = Math.max(1, Math.min(mapX, COL - 2));
+        mapY = Math.max(1, Math.min(mapY, ROW - 2));
+
         Log.i(TAG, "updateCurCoord: CURRENT COORDS:"+curCoord[0]+","+curCoord[1]);
         if(curCoord[0] != -1 && curCoord[1] != -1){
             Log.i(TAG, "updateCurCoord: UNSETTING ROBOT");
-            //Unset old robot position
             int[] oldCoordIndexes = convertMapCoordToCellsIndexes(curCoord[0],curCoord[1]);
             int oldCoordXindex = oldCoordIndexes[0];
             int oldCoordYindex = oldCoordIndexes[1];
@@ -342,13 +344,14 @@ public class GridMap extends View {
             }
         }
 
-        //Update new location
         robotDirection = direction;
         curCoord[0] = mapX;
         curCoord[1] = mapY;
+
         int[] newCoordIndexes = convertMapCoordToCellsIndexes(mapX,mapY);
         int newCoordXIndex = newCoordIndexes[0];
         int newCoordYIndex = newCoordIndexes[1];
+
         for (int x = newCoordXIndex - 1; x <= newCoordXIndex + 1; x++) {
             for (int y = newCoordYIndex - 1; y <= newCoordYIndex + 1; y++) {
                 if (cells[x][y].type != CellType.OBSTACLE && cells[x][y].type != CellType.BORDER) {
@@ -358,6 +361,7 @@ public class GridMap extends View {
         }
         invalidate();
     }
+
 
     public void setRobotDirection(Direction direction) {
         robotDirection = direction;
@@ -543,10 +547,13 @@ public class GridMap extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-
         showLog("Entering onTouchEvent");
         int mapX = (int) (event.getX() / cellSize) - 1;
         int mapY = ROW - ((int) (event.getY() / cellSize));
+
+        int robotX = curCoord[0];
+        int robotY = curCoord[1];
+        int touchTolerance = 1; // can be 0 or 1 cell for flexibility
 
         Cell selectedCell = null;
         if ((mapX >= 0 && mapY >= 0 && mapX <= COL - 1 && mapY <= ROW - 1)) {
@@ -554,6 +561,15 @@ public class GridMap extends View {
         }
 
         if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            if (setDirection && selectedCell != null) {
+                startFacingSelection(selectedCell);
+            }
+            if (!robotSelected && selectedCell != null) {
+                if (Math.abs(robotX - mapX) <= touchTolerance && Math.abs(robotY - mapY) <= touchTolerance) {
+                    robotSelected = true;
+                    return true;
+                }
+            }
             if (startCoordStatus && selectedCell != null) {
                 //TODO: Draw Robot
                 //Move to a new function setRobotPosition(int x, int y)
@@ -569,9 +585,6 @@ public class GridMap extends View {
                 this.setObstacleCoord(mapX, mapY);
                 return true;
             }
-            if (setObstacleDirection && selectedCell != null) {
-                startFacingSelection(selectedCell);
-            }
             if (obsSelected == false && selectedCell != null) {
                 for (int i = 0; i < obstacleCoords.size(); i++)
                     if (obstacleCoords.get(i)[0] == mapX && obstacleCoords.get(i)[1] == mapY) {
@@ -586,6 +599,10 @@ public class GridMap extends View {
             if (obsSelected) {
                 obsSelected = false;
                 Log.d("obsSelected", Boolean.toString(obsSelected));
+                return true;
+            }
+            if (robotSelected) {
+                robotSelected = false;
                 return true;
             }
         }else if(event.getAction() == MotionEvent.ACTION_MOVE){
@@ -617,6 +634,13 @@ public class GridMap extends View {
                     return true;
                 }
 
+            }
+            if (robotSelected) {
+                if (mapX >= 0 && mapX < COL && mapY >= 0 && mapY < ROW) {
+                    updateCurCoord(mapX, mapY, robotDirection);  // move robot
+                    invalidate();
+                }
+                return true;
             }
         }
         showLog("Exiting onTouchEvent");
@@ -713,6 +737,11 @@ public class GridMap extends View {
         mapDrawn = false;
         canDrawRobot = false;
         oCellArr = new ArrayList<>();
+        obsSelected = false;
+        robotSelected = false;
+        startCoordStatus = false;
+        setObstacleStatus = false;
+        setDirection = false;
 
         // newly added
         obstacleNoArray = new int[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
