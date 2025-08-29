@@ -1,0 +1,25 @@
+# core
+opencv-python>=4.5
+numpy>=1.22
+psutil>=5.8
+Pillow>=9.0
+scikit-learn>=1.0
+
+
+# TensorFlow for the lightweight classifier
+tensorflow>=2.10,<3.0
+
+
+# PyTorch + Ultralytics YOLOv8
+torch>=1.13
+ultralytics>=8.0.0
+
+
+# utilities
+tqdm
+matplotlib
+pandas
+
+
+# optional (Coral TPU / EdgeTPU users - not required)
+# pycoral
