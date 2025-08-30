@@ -56,8 +56,8 @@ def validate_inputs(csv_path, input_size):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--csv', required=True, help='CSV with image_path,label')
-    parser.add_argument('--out', required=True, help='Output model path (.h5)')
+    parser.add_argument('--csv', required=True, help='CSV with image_path,label (e.g. train.csv, no bbox columns)')
+    parser.add_argument('--out', default="models/two_stage_classifier.h5", help='Output model path (.h5)')
     parser.add_argument('--input_size', type=int, nargs=2, default=[64, 64])
     parser.add_argument('--epochs', type=int, default=20)
     parser.add_argument('--val_split', type=float, default=0.1)

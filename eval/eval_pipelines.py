@@ -19,7 +19,7 @@ from two_stage.classifier import TinyClassifier, cv2_resize
 from yolo.runner import load_model, infer as yolo_infer
 
 
-def load_labels(csv_path: str) -> List[Tuple[str, int]]:
+def load_labels(csv_path: str, prefix: str = "Data/") -> List[Tuple[str, int]]:
     rows = []
     if not os.path.exists(csv_path):
         print(f"[ERROR] Labels CSV not found: {csv_path}")
@@ -31,7 +31,9 @@ def load_labels(csv_path: str) -> List[Tuple[str, int]]:
                 print(f"[WARN] Row {idx} malformed: {r}")
                 continue
             try:
-                rows.append((r[0], int(r[1])))
+                # Prepend the prefix (e.g., "Data/")
+                img_path = os.path.join(prefix, r[0]) if prefix else r[0]
+                rows.append((img_path, int(r[1])))
             except Exception as e:
                 print(f"[WARN] Row {idx} parse error: {r}, {e}")
     return rows
@@ -163,11 +165,13 @@ def run_comparison(labels_csv: str, classifier: TinyClassifier, yolo_path: str =
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--labels', required=True, help='CSV file: image_path,label')
-    parser.add_argument('--yolo', default='yolov8n.pt')
+    parser.add_argument('--test_csv', required=True, help='test.csv for two-stage (no bbox)')
+    parser.add_argument('--test_converted_csv', required=True, help='test_converted.csv for YOLO (with bbox)')
+    parser.add_argument('--yolo', default='yolov8n.pt', help='YOLO model weights')
     parser.add_argument('--classifier', default=None, help='Path to saved tiny classifier (h5 or folder)')
     parser.add_argument('--num_classes', type=int, default=43)
     args = parser.parse_args()
+
     # load classifier
     clf = TinyClassifier(num_classes=args.num_classes)
     if args.classifier:
@@ -175,4 +179,12 @@ if __name__ == '__main__':
     else:
         clf.build()
         print('Warning: classifier built untrained — results will be meaningless.')
-    run_comparison(args.labels, clf, yolo_path=args.yolo)
+    # Evaluate two-stage pipeline on test.csv (no bbox)
+    print('Evaluating two-stage pipeline...')
+    two_stats = eval_two_stage(args.test_csv, clf, input_size=clf.input_size)
+    # Evaluate YOLO pipeline on test_converted.csv (with bbox)
+    print('Evaluating YOLO pipeline...')
+    yolo_stats = eval_yolo(args.test_converted_csv, yolo_path=args.yolo)
+    print('\nResults:')
+    print('Two-stage:', two_stats)
+    print('YOLO:', yolo_stats)

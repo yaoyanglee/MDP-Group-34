@@ -1,147 +1,116 @@
-"""Preprocessing pipeline for GTSRB/BelgianTS datasets.
-
-Features:
-- Generates classifier crops (resized, optionally black-bordered) and CSV for two-stage pipeline.
-- Generates YOLO-format label files from GTSRB/BelgianTS annotations.
-
-Assumes:
-- Dataset root contains images and a CSV with columns: filename,class_id[,xmin,ymin,xmax,ymax]
-- If bounding boxes are present, uses them; else, uses full image.
 """
-import sys
-import os
-# Add project root to sys.path for robust relative imports
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-import os
-import csv
-import shutil
+Hybrid preprocessing for GTSRB/BelgianTS.
+
+Outputs:
+1. Two-stage classifier crops + CSV
+   -> train.csv / test.csv : filename,class_id
+2. YOLO dataset (original images only) with normalized .txt labels
+   -> one .txt per image in same folder as image
+"""
+
+import os, csv, shutil
 from pathlib import Path
 import cv2
-import numpy as np
+from tqdm import tqdm
+from two_stage.detector import detect_and_crop
 
-def ensure_dir(p):
-    Path(p).mkdir(parents=True, exist_ok=True)
+def ensure_dir(p): Path(p).mkdir(parents=True, exist_ok=True)
 
-def safe_path(base, fname, flatten=False):
-    """Join base + fname, optionally flattening subdirs."""
-    if flatten:
-        return os.path.join(base, os.path.basename(fname))
-    return os.path.join(base, fname)
-
-def make_classifier_crops(csv_path, img_dir, out_dir, crop_size=(64,64), use_bbox=True, flatten=False):
-    """Generate crops for classifier and a CSV: image_path,label"""
-    from tqdm import tqdm
+# ------------------------
+# Two-stage classifier
+# ------------------------
+def make_classifier_set(csv_in, img_dir, out_dir, crop_size=(64,64)):
+    """Run detector, save crops, and write classifier CSV (fname,label)."""
     ensure_dir(out_dir)
-    out_csv = os.path.join(out_dir, 'classifier_labels.csv')
-    if not os.path.exists(csv_path):
-        print(f"[ERROR] CSV file not found: {csv_path}")
-        return
-    if not os.path.isdir(img_dir):
-        print(f"[ERROR] Image directory not found: {img_dir}")
-        return
-    from two_stage.detector import detect_and_crop
-    DETECTOR_KWARGS = dict(min_area=200, eps_coef=0.03)  # min_area is int, eps_coef is float
-    with open(csv_path, 'r') as f, open(out_csv, 'w', newline='') as fout:
-        reader = list(csv.reader(f))
-        writer = csv.writer(fout)
-        for idx, row in enumerate(tqdm(reader, desc='Classifier crops (detector)')):
-            if not row or row[0].startswith('#'):
-                continue
-            if len(row) < 2:
-                print(f"[WARN] Row {idx} malformed: {row}")
-                continue
+    out_csv = os.path.join(out_dir, "train.csv" if "train" in csv_in.lower() else "test.csv")
+    passed, skipped = 0, 0
+
+    with open(csv_in, "r") as f, open(out_csv, "w", newline="") as fout:
+        reader, writer = list(csv.reader(f)), csv.writer(fout)
+        if reader and ("filename" in reader[0][0].lower() or "path" in reader[0][0].lower()):
+            reader = reader[1:]
+
+        for idx, row in enumerate(tqdm(reader, desc="Two-stage crops")):
+            if len(row) < 2: continue
             fname, class_id = row[0], row[1]
             img_path = os.path.join(img_dir, fname)
-            if not os.path.exists(img_path):
-                print(f"[WARN] Image not found: {img_path}")
+            if not os.path.exists(img_path): skipped += 1; continue
+            img = cv2.imread(img_path)
+            if img is None: skipped += 1; continue
+
+            crops = detect_and_crop(img, min_area=200, eps_coef=0.03)
+            if not crops: skipped += 1; continue
+
+            for ci, crop in enumerate(crops):
+                crop = cv2.resize(crop, crop_size)
+                crop_name = f"{Path(fname).stem}_crop{ci}.png"
+                crop_path = os.path.join(out_dir, crop_name)
+                cv2.imwrite(crop_path, crop)
+                writer.writerow([crop_path, class_id])
+                passed += 1
+
+    print(f"[INFO] Wrote classifier CSV {out_csv}, {passed} crops, {skipped} skipped.")
+
+# ------------------------
+# YOLO labels (.txt) generation
+# ------------------------
+def make_yolo_txt_labels(csv_in, img_dir, out_img_dir, out_label_dir):
+    """
+    Generate YOLO-compatible .txt labels.
+    csv_in: CSV with filename,class_id,xmin,ymin,xmax,ymax
+    img_dir: folder with images
+    out_img_dir: folder to copy images into
+    """
+    ensure_dir(out_img_dir)
+    ensure_dir(out_label_dir)
+    with open(csv_in, "r") as f:
+        reader = list(csv.reader(f))
+        if reader and ("filename" in reader[0][0].lower() or "path" in reader[0][0].lower()):
+            reader = reader[1:]
+
+        for row in tqdm(reader, desc="YOLO .txt labels"):
+            if len(row) < 6:
                 continue
+            fname, cls, xmin, ymin, xmax, ymax = row
+            img_path = os.path.join(img_dir, fname)
+            if not os.path.exists(img_path):
+                print(f"[WARN] Image missing: {img_path}")
+                continue
+
+                # Copy image to output dir
+            out_img_path = os.path.join(out_img_dir, os.path.basename(fname))
+            ensure_dir(os.path.dirname(out_img_path))
+            shutil.copy(img_path, out_img_path)
+            # Read image shape
             img = cv2.imread(img_path)
             if img is None:
                 print(f"[WARN] Failed to read image: {img_path}")
-                continue
-            try:
-                crops = detect_and_crop(img, **DETECTOR_KWARGS)
-                if not crops:
-                    print(f"[WARN] Detector found no crops in {img_path}")
-                    continue
-                for i, crop in enumerate(crops):
-                    crop = cv2.resize(crop, crop_size, interpolation=cv2.INTER_AREA)
-                    bordered = cv2.copyMakeBorder(crop, 2,2,2,2, cv2.BORDER_CONSTANT, value=(0,0,0))
-                    out_img_path = safe_path(out_dir, f"{Path(fname).stem}_detcrop{i}.png", flatten=True)
-                    ensure_dir(os.path.dirname(out_img_path))
-                    cv2.imwrite(out_img_path, bordered)
-                    writer.writerow([out_img_path, class_id])
-            except Exception as e:
-                print(f"[ERROR] Exception processing {img_path}: {e}")
-    print(f"Classifier crops and CSV written to {out_dir}")
+                continue  # or skip writing bbox
+            h, w = img.shape[:2]
+            # Normalize bbox
+            x_center = (float(xmin) + float(xmax)) / 2 / w
+            y_center = (float(ymin) + float(ymax)) / 2 / h
+            bw = (float(xmax) - float(xmin)) / w
+            bh = (float(ymax) - float(ymin)) / h
+            # Write .txt file to yolo_label_dir
+            txt_file = os.path.splitext(os.path.basename(fname))[0] + ".txt"
+            txt_path = os.path.join(out_label_dir, txt_file)
+            with open(txt_path, "w") as ftxt:
+                ftxt.write(f"{cls} {x_center} {y_center} {bw} {bh}\n")
 
-def make_yolo_labels(csv_path, img_dir, yolo_img_dir, yolo_label_dir, img_wh=(64,64), flatten=False):
-    """Generate YOLO-format label files and copy images to yolo_img_dir."""
-    from tqdm import tqdm
-    ensure_dir(yolo_img_dir)
-    ensure_dir(yolo_label_dir)
-    if not os.path.exists(csv_path):
-        print(f"[ERROR] CSV file not found: {csv_path}")
-        return
-    if not os.path.isdir(img_dir):
-        print(f"[ERROR] Image directory not found: {img_dir}")
-        return
-    with open(csv_path, 'r') as f:
-        reader = list(csv.reader(f))
-        for idx, row in enumerate(tqdm(reader, desc='YOLO labels')):
-            if not row or row[0].startswith('#'):
-                continue
-            if len(row) < 2:
-                print(f"[WARN] Row {idx} malformed: {row}")
-                continue
-            fname, class_id = row[0], row[1]
-            img_path = os.path.join(img_dir, fname)
-            if not os.path.exists(img_path):
-                print(f"[WARN] Image not found: {img_path}")
-                continue
-            img = cv2.imread(img_path)
-            if img is None:
-                print(f"[WARN] Failed to read image: {img_path}")
-                continue
-            try:
-                h, w = img.shape[:2]
-                if len(row) >= 6:
-                    xmin, ymin, xmax, ymax = map(int, row[2:6])
-                else:
-                    xmin, ymin, xmax, ymax = 0, 0, w, h
-                x_center = (xmin + xmax) / 2 / w
-                y_center = (ymin + ymax) / 2 / h
-                bw = (xmax - xmin) / w
-                bh = (ymax - ymin) / h
-                yolo_label = f"{class_id} {x_center:.6f} {y_center:.6f} {bw:.6f} {bh:.6f}\n"
+    print(f"[INFO] YOLO .txt labels generated in {out_img_dir}")
 
-                out_img_path = safe_path(yolo_img_dir, fname, flatten=flatten)
-                out_label_path = safe_path(yolo_label_dir, Path(fname).stem + '.txt', flatten=flatten)
-
-                ensure_dir(os.path.dirname(out_img_path))
-                ensure_dir(os.path.dirname(out_label_path))
-
-                shutil.copy(img_path, out_img_path)
-                with open(out_label_path, 'w') as fout:
-                    fout.write(yolo_label)
-            except Exception as e:
-                print(f"[ERROR] Exception processing {img_path}: {e}")
-    print(f"YOLO images and labels written to {yolo_img_dir}, {yolo_label_dir}")
-
-if __name__ == '__main__':
+# ------------------------
+if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--csv', required=True, help='CSV with filename,class_id[,xmin,ymin,xmax,ymax]')
-    parser.add_argument('--img_dir', required=True, help='Directory with images')
-    parser.add_argument('--out_dir', required=True, help='Output directory for classifier crops')
-    parser.add_argument('--yolo_img_dir', required=True, help='Output directory for YOLO images')
-    parser.add_argument('--yolo_label_dir', required=True, help='Output directory for YOLO labels')
-    parser.add_argument('--crop_size', type=int, nargs=2, default=[64,64])
-    parser.add_argument('--no_bbox', action='store_true', help='Ignore bbox, use full image')
-    parser.add_argument('--flatten', action='store_true', help='Flatten paths (ignore subdirs)')
+    parser.add_argument("--csv_twostage", required=True, help="CSV for two-stage (filename,class_id)")
+    parser.add_argument("--csv_yolo", required=True, help="CSV for YOLO (filename,class_id,xmin,ymin,xmax,ymax)")
+    parser.add_argument("--img_dir", required=True, help="Directory with images")
+    parser.add_argument("--cls_out", required=True, help="Output dir for classifier crops")
+    parser.add_argument("--yolo_img_out", required=True, help="Output directory for YOLO images")
+    parser.add_argument("--yolo_label_out", required=True, help="Output directory for YOLO labels")
     args = parser.parse_args()
 
-    make_classifier_crops(args.csv, args.img_dir, args.out_dir,
-                          tuple(args.crop_size), use_bbox=not args.no_bbox, flatten=args.flatten)
-    make_yolo_labels(args.csv, args.img_dir, args.yolo_img_dir,
-                     args.yolo_label_dir, flatten=args.flatten)
+    make_classifier_set(args.csv_twostage, args.img_dir, args.cls_out)
+    make_yolo_txt_labels(args.csv_yolo, args.img_dir, args.yolo_img_out, args.yolo_label_out)
