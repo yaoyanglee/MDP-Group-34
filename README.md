@@ -6,17 +6,17 @@
 
 ### Results:
 **Two-stage:**
-'accuracy': 0.2%
-'avg_latency': 0.001 ms
-'mean_ram_usage': 4.4MB
-'mean_cpu': 0.038 
-'n': 12630
+- 'accuracy': 0.2%
+- 'avg_latency': 0.001 ms
+- 'mean_ram_usage': 4.4MB
+- 'mean_cpu': 0.038 
+- 'n': 12630
 **YOLO:**
-'accuracy': 99.4%
-'avg_latency': 0.004 ms
-'mean_ram_usage': 2.2MB
-'mean_cpu': 0.925
-'n': 12630
+- 'accuracy': 99.4%
+- 'avg_latency': 0.004 ms
+- 'mean_ram_usage': 2.2MB
+- 'mean_cpu': 0.925
+- 'n': 12630
 
 ### Remarks:
 - Current Detection layer:
