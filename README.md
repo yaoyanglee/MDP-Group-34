@@ -11,7 +11,7 @@
 - 'mean_ram_usage': 4.4MB
 - 'mean_cpu': 0.038 
 - 'n': 12630
-**YOLO:**
+\n**YOLO:**
 - 'accuracy': 99.4%
 - 'avg_latency': 0.004 ms
 - 'mean_ram_usage': 2.2MB
