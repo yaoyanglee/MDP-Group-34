@@ -422,7 +422,7 @@ import java.util.UUID;
 public class BluetoothConnectionService {
     public static final String TAG = "BtConnectionSvc";
 
-    private static final String appName = "MDP-GRP24-CONTROLLER";
+    private static final String appName = "MDP-GRP34-CONTROLLER";
 //    private static final UUID MY_UUID_INSECURE =
 //            UUID.fromString("e1340f1b-3c5d-4adf-9198-7bbf93bafdd1");
     private static final UUID MY_UUID_INSECURE =
@@ -502,7 +502,8 @@ public class BluetoothConnectionService {
                 try {
                     Log.d(TAG, "ConnectThread: Trying to create InsecureRfcommSocket using UUID: "
                             +MY_UUID_INSECURE );
-                    tmp = bluetoothDevice.createRfcommSocketToServiceRecord(deviceUUID);
+//                    tmp = bluetoothDevice.createRfcommSocketToServiceRecord(deviceUUID);
+                    tmp = bluetoothDevice.createRfcommSocketToServiceRecord(MY_UUID_INSECURE);
                 } catch (IOException e) {
                     Log.e(TAG, "ConnectThread: Could not create InsecureRfcommSocket " + e.getMessage());
                 }
@@ -655,6 +656,7 @@ public class BluetoothConnectionService {
         try{
             JSONObject msgJSON = new JSONObject(msg);
             String msgType = msgJSON.getString("cat");
+            Log.d(TAG, "handleIncomingBTMessage: msgType = " + msgType);
             switch(msgType.toUpperCase()){
                 case "INFO":
                     String infoStr = msgJSON.getString("value");

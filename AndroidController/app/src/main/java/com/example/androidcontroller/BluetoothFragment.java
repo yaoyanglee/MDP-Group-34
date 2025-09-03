@@ -1061,11 +1061,15 @@ public class BluetoothFragment extends Fragment {
         @Override
         public void onReceive(Context context, Intent intent) {
             String text = intent.getStringExtra("msg");
+
             if(receivedTextView.getText() == null){
                 receivedTextView.setText(text);
             }else{
                 receivedTextView.setText(receivedTextView.getText() + "\n"+text);
             }
+
+            Log.d(TAG, "bluetoothMsgReceiver received: " + text +
+                    ", receivedTextView is " + (receivedTextView == null ? "null" : "not null"));
         }
     };
 
