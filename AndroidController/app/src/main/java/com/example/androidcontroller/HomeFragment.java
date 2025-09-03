@@ -29,12 +29,10 @@ import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
-import org.w3c.dom.Text;
 
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -385,7 +383,7 @@ public class HomeFragment extends Fragment{
             try{
                 settingDir = !settingDir;
                 if(settingDir){
-                    gridMap.setSetObstacleDirection(settingDir);
+                    gridMap.setSetDirection(settingDir);
                     btnSetFacing.setText("Stop Set Facing");
 
                     //Disable Other Buttons
@@ -395,7 +393,7 @@ public class HomeFragment extends Fragment{
                     btnSendStartFastestCar.setEnabled(false);
                     btnSendStartImageRec.setEnabled(false);
                 }else{
-                    gridMap.setSetObstacleDirection(settingDir);
+                    gridMap.setSetDirection(settingDir);
                     btnSetFacing.setText("Set Facing");
 
                     //Reenable other buttons
