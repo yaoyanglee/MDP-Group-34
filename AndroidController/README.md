@@ -28,6 +28,9 @@
 
 I.e. Updates the  obstacle with `obstacle_id` on the android app to the image recognised by the model, `image_id`.
 
+### Command to start Task 2 
+`{"cat": "control", "value": "start"}`: Sends a command from the Android app to the RPi to start the 2nd task. 
+
 ## Key Functions
 These functions, in `HomeFragment.java`, receive the function inputs from `BluetoothConnnectionService.java`.
 
