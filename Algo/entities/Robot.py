@@ -1,27 +1,38 @@
-from typing import List
-from entities.Entity import CellState
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Iterable, List
+
 from consts import Direction
+from entities.Entity import CellState
+
+
+@dataclass
+class _StateLedger:
+    """Tracks the robot's positional history."""
+
+    _entries: List[CellState]
+
+    @classmethod
+    def bootstrap(cls, initial_state: CellState) -> "_StateLedger":
+        return cls([initial_state])
+
+    def expose(self) -> List[CellState]:
+        return self._entries
+
+    def origin(self) -> CellState:
+        return self._entries[0]
 
 
 class Robot:
-    def __init__(self, center_x: int, center_y: int, start_direction: Direction):
-        """Robot object class
+    """Encapsulates mutable robot state while keeping legacy attributes available."""
 
-        Args:
-            center_x (int): x coordinate of center of robot
-            center_y (int): y coordinate of center of robot
-            start_direction (Direction): Direction robot is facing at the start
+    __slots__ = ("_ledger", "states")
 
-        Internals:
-            states: List of cell states of the robot's historical path
-        """
-        self.states: List[CellState] = [
-            CellState(center_x, center_y, start_direction)]
+    def __init__(self, center_x: int, center_y: int, start_direction: Direction) -> None:
+        anchor = CellState(center_x, center_y, start_direction)
+        self._ledger = _StateLedger.bootstrap(anchor)
+        self.states = self._ledger.expose()
 
-    def get_start_state(self):
-        """Returns the starting cell state of the robot
-
-        Returns:
-            CellState: starting cell state of robot (x,y,d)
-        """
-        return self.states[0]
+    def get_start_state(self) -> CellState:
+        return self._ledger.origin()
