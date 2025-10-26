@@ -1,385 +1,314 @@
+from __future__ import annotations
+
+import glob
 import os
 import shutil
 import time
-import glob
+from dataclasses import dataclass
+from typing import Iterable, List, Mapping, Sequence
+
+import cv2
+import numpy as np
 import torch
 from PIL import Image
-import cv2
-import random
-import string
-import numpy as np
-import random
 
-def get_random_string(length):
-    """
-    Generate a random string of fixed length 
 
-    Inputs
-    ------
-    length: int - length of the string to be generated
+# ---------------------------------------------------------------------------
+# configuration helpers
 
-    Returns
-    -------
-    str - random string
 
-    """
-    result_str = ''.join(random.choice(string.ascii_letters) for i in range(length))
-    return result_str
+@dataclass(frozen=True)
+class _ModelSource:
+    weight_file: str = "Week_9.pt"
+    repo_root: str = "./"
+    entrypoint: str = "custom"
+
+
+@dataclass(frozen=True)
+class _FolderLayout:
+    uploads: str = "uploads"
+    runs: str = "runs"
+    runs_originals: str = os.path.join(runs, "originals")
+    own_results: str = "own_results"
+
+
+@dataclass(frozen=True)
+class _DetectionClassMap:
+    name_to_id: Mapping[str, str]
+
+    @staticmethod
+    def default() -> "_DetectionClassMap":
+        mapping = {
+            "NA": "NA",
+            "Bullseye": "10",
+            "One": "11",
+            "Two": "12",
+            "Three": "13",
+            "Four": "14",
+            "Five": "15",
+            "Six": "16",
+            "Seven": "17",
+            "Eight": "18",
+            "Nine": "19",
+            "A": "20",
+            "B": "21",
+            "C": "22",
+            "D": "23",
+            "E": "24",
+            "F": "25",
+            "G": "26",
+            "H": "27",
+            "S": "28",
+            "T": "29",
+            "U": "30",
+            "V": "31",
+            "W": "32",
+            "X": "33",
+            "Y": "34",
+            "Z": "35",
+            "Up": "36",
+            "Down": "37",
+            "Right": "38",
+            "Left": "39",
+            "Up Arrow": "36",
+            "Down Arrow": "37",
+            "Right Arrow": "38",
+            "Left Arrow": "39",
+            "Stop": "40",
+        }
+        return _DetectionClassMap(mapping)
+
+    def resolve(self, label: str) -> str:
+        return self.name_to_id[label]
+
+
+SOURCE = _ModelSource()
+FOLDERS = _FolderLayout()
+CLASS_IDS = _DetectionClassMap.default()
+
+
+# ---------------------------------------------------------------------------
+# public API
+
 
 def load_model():
-    """
-    Load the model from the local directory
-    """
-    #model = torch.hub.load('./', 'custom', path='YOLOv5_new.pt', source='local')
-    model = torch.hub.load('./', 'custom', path='Week_9.pt', source='local')
-    return model
+    """Load the YOLOv5 weights from disk via torch hub."""
 
-def draw_own_bbox(img,x1,y1,x2,y2,label,color=(36,255,12),text_color=(0,0,0)):
-    """
-    Draw bounding box on the image with text label and save both the raw and annotated image in the 'own_results' folder
-
-    Inputs
-    ------
-    img: numpy.ndarray - image on which the bounding box is to be drawn
-
-    x1: int - x coordinate of the top left corner of the bounding box
-
-    y1: int - y coordinate of the top left corner of the bounding box
-
-    x2: int - x coordinate of the bottom right corner of the bounding box
-
-    y2: int - y coordinate of the bottom right corner of the bounding box
-
-    label: str - label to be written on the bounding box
-
-    color: tuple - color of the bounding box
-
-    text_color: tuple - color of the text label
-
-    Returns
-    -------
-    None
-
-    """
-    name_to_id = {
-        "NA": 'NA',
-        "Bullseye": 10,
-        "One": 11,
-        "Two": 12,
-        "Three": 13,
-        "Four": 14,
-        "Five": 15,
-        "Six": 16,
-        "Seven": 17,
-        "Eight": 18,
-        "Nine": 19,
-        "A": 20,
-        "B": 21,
-        "C": 22,
-        "D": 23,
-        "E": 24,
-        "F": 25,
-        "G": 26,
-        "H": 27,
-        "S": 28,
-        "T": 29,
-        "U": 30,
-        "V": 31,
-        "W": 32,
-        "X": 33,
-        "Y": 34,
-        "Z": 35,
-        "Up": 36,
-        "Down": 37,
-        "Right": 38,
-        "Left": 39,
-        "Up Arrow": 36,
-        "Down Arrow": 37,
-        "Right Arrow": 38,
-        "Left Arrow": 39,
-        "Stop": 40
-    }
-    # Reformat the label to {label name}-{label id}
-    label = label + "-" + str(name_to_id[label])
-    # Convert the coordinates to int
-    x1 = int(x1)
-    x2 = int(x2)
-    y1 = int(y1)
-    y2 = int(y2)
-    # Create a random string to be used as the suffix for the image name, just in case the same name is accidentally used
-    rand = str(int(time.time()))
-
-    # Save the raw image
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    cv2.imwrite(f"own_results/raw_image_{label}_{rand}.jpg", img)
-
-    # Draw the bounding box
-    img = cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-    # For the text background, find space required by the text so that we can put a background with that amount of width.
-    (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-    # Print the text  
-    img = cv2.rectangle(img, (x1, y1 - 20), (x1 + w, y1), color, -1)
-    img = cv2.putText(img, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 1)
-    # Save the annotated image
-    cv2.imwrite(f"own_results/annotated_image_{label}_{rand}.jpg", img)
+    return torch.hub.load(
+        SOURCE.repo_root,
+        SOURCE.entrypoint,
+        path=SOURCE.weight_file,
+        source="local",
+    )
 
 
-def predict_image(image, model, signal):
-    """
-    Predict the image using the model and save the results in the 'runs' folder
-    
-    Inputs
-    ------
-    image: str - name of the image file
+def predict_image(filename: str, model, signal: str) -> str:
+    """Run inference on an uploaded image and return the chosen class ID string."""
 
-    model: torch.hub.load - model to be used for prediction
-
-    signal: str - signal to be used for filtering the predictions
-
-    Returns
-    -------
-    str - predicted label
-    """
     try:
-        # Load the image
-        img = Image.open(os.path.join('uploads', image))
+        image = _open_upload(filename)
+        result_bundle = _run_inference(model, image)
+        predictions = _prepare_predictions(result_bundle)
+        filtered = _filter_candidates(predictions, signal)
+        _draw_if_needed(image, filtered)
+        label = _extract_identifier(filtered)
+        print(f"Final result: {label}")
+        return label
+    except Exception:
+        print("Final result: NA")
+        return "NA"
 
-        # Predict the image using the model
-        results = model(img)
 
-        # Images with predicted bounding boxes are saved in the runs folder
-        results.save('runs')
-
-        # Convert the results to a pandas dataframe and calculate the height and width of the bounding box and the area of the bounding box
-        df_results = results.pandas().xyxy[0]
-        df_results['bboxHt'] = df_results['ymax'] - df_results['ymin']
-        df_results['bboxWt'] = df_results['xmax'] - df_results['xmin']
-        df_results['bboxArea'] = df_results['bboxHt'] * df_results['bboxWt']
-
-        # Label with largest bbox height will be last
-        df_results = df_results.sort_values('bboxArea', ascending=False)
-
-        # Filter out Bullseye
-        pred_list = df_results 
-        pred_list = pred_list[pred_list['name'] != 'Bullseye']
-        
-        # Initialize prediction to NA
-        pred = 'NA'
-
-        # Ignore Bullseye unless they are the only image detected and select the last label in the list (the last label will be the one with the largest bbox height)
-        if len(pred_list) == 1:
-            if pred_list.iloc[0]['name'] != 'Bullseye':
-                pred = pred_list.iloc[0]
-
-        # If more than 1 label is detected
-        elif len(pred_list) > 1:
-
-            # More than 1 Symbol detected, filter by confidence and area
-            pred_shortlist = []
-            current_area = pred_list.iloc[0]['bboxArea']
-            # For each prediction, check if the confidence is greater than 0.5 and if the area is greater than 80% of the current area or 60% if the prediction is 'One'
-            for _, row in pred_list.iterrows():
-                if row['name'] != 'Bullseye' and row['confidence'] > 0.5 and ((current_area * 0.8 <= row['bboxArea']) or (row['name'] == 'One' and current_area * 0.6 <= row['bboxArea'])):
-                    # Add the prediction to the shortlist
-                    pred_shortlist.append(row)
-                    # Update the current area to the area of the prediction
-                    current_area = row['bboxArea']
-            
-            # If only 1 prediction remains after filtering by confidence and area
-            if len(pred_shortlist) == 1:
-                # Choose that prediction
-                pred = pred_shortlist[0]
-
-            # If multiple predictions remain after filtering by confidence and area
-            else:
-                # Use signal of {signal} to filter further 
-                
-                # Sort the predictions by xmin
-                pred_shortlist.sort(key=lambda x: x['xmin'])
-
-                # If signal is 'L', choose the first prediction in the list, i.e. leftmost in the image
-                if signal == 'L':
-                    pred = pred_shortlist[0]
-                
-                # If signal is 'R', choose the last prediction in the list, i.e. rightmost in the image
-                elif signal == 'R':
-                    pred = pred_shortlist[-1]
-                
-                # If signal is 'C', choose the prediction that is central in the image
-                else:
-                    # Loop through the predictions shortlist
-                    for i in range(len(pred_shortlist)):
-                        # If the xmin of the prediction is between 250 and 774, i.e. the center of the image, choose that prediction
-                        if pred_shortlist[i]['xmin'] > 250 and pred_shortlist[i]['xmin'] < 774:
-                            pred = pred_shortlist[i]
-                            break
-                    
-                    # If no prediction is central, choose the one with the largest area
-                    if isinstance(pred,str):
-                        # Choosing one with largest area if none are central
-                        pred_shortlist.sort(key=lambda x: x['bboxArea']) 
-                        pred = pred_shortlist[-1]
-        
-        # Draw the bounding box on the image
-        if not isinstance(pred,str):
-            draw_own_bbox(np.array(img), pred['xmin'], pred['ymin'], pred['xmax'], pred['ymax'], pred['name'])
-
-        name_to_id = {
-            "NA": 'NA',
-            "Bullseye": 10,
-            "One": 11,
-            "Two": 12,
-            "Three": 13,
-            "Four": 14,
-            "Five": 15,
-            "Six": 16,
-            "Seven": 17,
-            "Eight": 18,
-            "Nine": 19,
-            "A": 20,
-            "B": 21,
-            "C": 22,
-            "D": 23,
-            "E": 24,
-            "F": 25,
-            "G": 26,
-            "H": 27,
-            "S": 28,
-            "T": 29,
-            "U": 30,
-            "V": 31,
-            "W": 32,
-            "X": 33,
-            "Y": 34,
-            "Z": 35,
-            "Up": 36,
-            "Down": 37,
-            "Right": 38,
-            "Left": 39,
-            "Up Arrow": 36,
-            "Down Arrow": 37,
-            "Right Arrow": 38,
-            "Left Arrow": 39,
-            "Stop": 40
-        }
-        # If pred is not a string, i.e. a prediction was made and pred is not 'NA'
-        if not isinstance(pred,str):
-            image_id = str(name_to_id[pred['name']])
-        else:
-            image_id = 'NA'
-        print(f"Final result: {image_id}")
-        return image_id
-    # If some error happened, we just return 'NA' so that the inference loop is closed
-    except:
-        print(f"Final result: NA")
-        return 'NA'
-
-def predict_image_week_9(image, model):
-    # Load the image
-    img = Image.open(os.path.join('uploads', image))
-    # Run inference
-    results = model(img)
-    # Save the results
-    results.save('runs')
-    # Convert the results to a dataframe
-    df_results = results.pandas().xyxy[0]
-    # Calculate the height and width of the bounding box and the area of the bounding box
-    df_results['bboxHt'] = df_results['ymax'] - df_results['ymin']
-    df_results['bboxWt'] = df_results['xmax'] - df_results['xmin']
-    df_results['bboxArea'] = df_results['bboxHt'] * df_results['bboxWt']
-
-    # Label with largest bbox height will be last
-    df_results = df_results.sort_values('bboxArea', ascending=False)
-    pred_list = df_results 
-    pred = 'NA'
-    # If prediction list is not empty
-    if pred_list.size != 0:
-        # Go through the predictions, and choose the first one with confidence > 0.5
-        for _, row in pred_list.iterrows():
-            if row['name'] != 'Bullseye' and row['confidence'] > 0.5:
-                pred = row    
-                break
-
-        # Draw the bounding box on the image 
-        if not isinstance(pred,str):
-            draw_own_bbox(np.array(img), pred['xmin'], pred['ymin'], pred['xmax'], pred['ymax'], pred['name'])
-        
-    # Dictionary is shorter as only two symbols, left and right are needed
-    name_to_id = {
-        "NA": 'NA',
-        "Bullseye": 10,
-        "Right": 38,
-        "Left": 39,
-        "Right Arrow": 38,
-        "Left Arrow": 39,
-    }
-    # Return the image id
-    if not isinstance(pred,str):
-        image_id = str(name_to_id[pred['name']])
-    else:
-        image_id = 'NA'
-    return image_id
+def predict_image_week_9(filename: str, model) -> str:
+    image = _open_upload(filename)
+    result_bundle = _run_inference(model, image)
+    predictions = _prepare_predictions(result_bundle)
+    chosen = _pick_first_valid(predictions)
+    _draw_if_needed(image, chosen)
+    return _extract_identifier(chosen)
 
 
 def stitch_image():
-    """
-    Stitches the images in the folder together and saves it into runs/stitched folder
-    """
-    # Initialize path to save stitched image
-    imgFolder = 'runs'
-    stitchedPath = os.path.join(imgFolder, f'stitched-{int(time.time())}.jpeg')
+    return _stitch_detect_folder(FOLDERS.runs, move_originals=True)
 
-    # Find all files that ends with ".jpg" (this won't match the stitched images as we name them ".jpeg")
-    imgPaths = glob.glob(os.path.join(imgFolder+"/detect/*/", "*.jpg"))
-    # Open all images
-    images = [Image.open(x) for x in imgPaths]
-    # Get the width and height of each image
-    width, height = zip(*(i.size for i in images))
-    # Calculate the total width and max height of the stitched image, as we are stitching horizontally
-    total_width = sum(width)
-    max_height = max(height)
-    stitchedImg = Image.new('RGB', (total_width, max_height))
-    x_offset = 0
-
-    # Stitch the images together
-    for im in images:
-        stitchedImg.paste(im, (x_offset, 0))
-        x_offset += im.size[0]
-    # Save the stitched image to the path
-    stitchedImg.save(stitchedPath)
-
-    # Move original images to "originals" subdirectory
-    for img in imgPaths:
-        shutil.move(img, os.path.join(
-            "runs", "originals", os.path.basename(img)))
-
-    return stitchedImg
 
 def stitch_image_own():
-    """
-    Stitches the images in the folder together and saves it into own_results folder
+    return _stitch_custom_results()
 
-    Basically similar to stitch_image() but with different folder names and slightly different drawing of bounding boxes and text
-    """
-    imgFolder = 'own_results'
-    stitchedPath = os.path.join(imgFolder, f'stitched-{int(time.time())}.jpeg')
 
-    imgPaths = glob.glob(os.path.join(imgFolder+"/annotated_image_*.jpg"))
-    imgTimestamps = [imgPath.split("_")[-1][:-4] for imgPath in imgPaths]
-    
-    sortedByTimeStampImages = sorted(zip(imgPaths, imgTimestamps), key=lambda x: x[1])
+# ---------------------------------------------------------------------------
+# inference helpers
 
-    images = [Image.open(x[0]) for x in sortedByTimeStampImages]
-    width, height = zip(*(i.size for i in images))
-    total_width = sum(width)
-    max_height = max(height)
-    stitchedImg = Image.new('RGB', (total_width, max_height))
-    x_offset = 0
 
-    for im in images:
-        stitchedImg.paste(im, (x_offset, 0))
-        x_offset += im.size[0]
-    stitchedImg.save(stitchedPath)
+def _open_upload(filename: str) -> Image.Image:
+    path = os.path.join(FOLDERS.uploads, filename)
+    return Image.open(path)
 
-    return stitchedImg
+
+def _run_inference(model, image: Image.Image):
+    results = model(image)
+    results.save(FOLDERS.runs)
+    return results
+
+
+def _prepare_predictions(results) -> List[Mapping]:
+    dataframe = results.pandas().xyxy[0].copy()
+    dataframe["bboxHt"] = dataframe["ymax"] - dataframe["ymin"]
+    dataframe["bboxWt"] = dataframe["xmax"] - dataframe["xmin"]
+    dataframe["bboxArea"] = dataframe["bboxHt"] * dataframe["bboxWt"]
+    dataframe = dataframe.sort_values("bboxArea", ascending=False)
+    return dataframe.to_dict("records")
+
+
+def _filter_candidates(predictions: Sequence[Mapping], signal: str):
+    pool = [p for p in predictions if p["name"] != "Bullseye"]
+    if not pool:
+        return "NA"
+
+    if len(pool) == 1:
+        return pool[0]
+
+    shortlist: List[Mapping] = []
+    current_area = pool[0]["bboxArea"]
+    for candidate in pool:
+        is_one = candidate["name"] == "One"
+        threshold = 0.6 if is_one else 0.8
+        if (
+            candidate["confidence"] > 0.5
+            and candidate["bboxArea"] >= current_area * threshold
+        ):
+            shortlist.append(candidate)
+            current_area = candidate["bboxArea"]
+
+    if len(shortlist) == 1:
+        return shortlist[0]
+
+    if not shortlist:
+        return pool[0]
+
+    shortlist.sort(key=lambda item: item["xmin"])
+    if signal == "L":
+        return shortlist[0]
+    if signal == "R":
+        return shortlist[-1]
+
+    for candidate in shortlist:
+        if 250 < candidate["xmin"] < 774:
+            return candidate
+
+    shortlist.sort(key=lambda item: item["bboxArea"])
+    return shortlist[-1]
+
+
+def _pick_first_valid(predictions: Sequence[Mapping]):
+    for candidate in predictions:
+        if candidate["name"] != "Bullseye" and candidate["confidence"] > 0.5:
+            return candidate
+    return "NA"
+
+
+def _draw_if_needed(image: Image.Image, candidate):
+    if isinstance(candidate, str):
+        return
+    _draw_bounding_box(np.array(image), candidate)
+
+
+def _draw_bounding_box(raw_image: np.ndarray, candidate: Mapping) -> None:
+    label = candidate["name"]
+    identifier = CLASS_IDS.resolve(label)
+    composite = f"{label}-{identifier}"
+
+    x1, y1, x2, y2 = (
+        int(candidate["xmin"]),
+        int(candidate["ymin"]),
+        int(candidate["xmax"]),
+        int(candidate["ymax"]),
+    )
+
+    timestamp = str(int(time.time()))
+    rgb_image = cv2.cvtColor(raw_image, cv2.COLOR_BGR2RGB)
+    _write_image(os.path.join(FOLDERS.own_results, f"raw_image_{composite}_{timestamp}.jpg"), rgb_image)
+
+    annotated = cv2.rectangle(rgb_image.copy(), (x1, y1), (x2, y2), (36, 255, 12), 2)
+    (width, _), baseline = cv2.getTextSize(composite, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+    cv2.rectangle(annotated, (x1, y1 - 20), (x1 + width, y1), (36, 255, 12), -1)
+    cv2.putText(annotated, composite, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    _write_image(
+        os.path.join(FOLDERS.own_results, f"annotated_image_{composite}_{timestamp}.jpg"),
+        annotated,
+    )
+
+
+def _write_image(path: str, image: np.ndarray) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    cv2.imwrite(path, image)
+
+
+def _extract_identifier(candidate) -> str:
+    if isinstance(candidate, str):
+        return candidate
+    return CLASS_IDS.resolve(candidate["name"])
+
+
+# ---------------------------------------------------------------------------
+# stitching helpers
+
+
+def _stitch_detect_folder(folder: str, move_originals: bool) -> Image.Image:
+    destination = os.path.join(folder, f"stitched-{int(time.time())}.jpeg")
+    pattern = os.path.join(folder, "detect/*/*.jpg")
+    images = _load_images(glob.glob(pattern))
+
+    stitched = _concatenate_horizontally(images)
+    stitched.save(destination)
+
+    if move_originals:
+        os.makedirs(FOLDERS.runs_originals, exist_ok=True)
+        for path in glob.glob(pattern):
+            shutil.move(path, os.path.join(FOLDERS.runs_originals, os.path.basename(path)))
+
+    return stitched
+
+
+def _stitch_custom_results() -> Image.Image:
+    destination = os.path.join(FOLDERS.own_results, f"stitched-{int(time.time())}.jpeg")
+    pattern = os.path.join(FOLDERS.own_results, "annotated_image_*.jpg")
+    pairs = _sorted_by_timestamp(glob.glob(pattern))
+    images = _load_images([path for path, _ in pairs])
+    stitched = _concatenate_horizontally(images)
+    stitched.save(destination)
+    return stitched
+
+
+def _sorted_by_timestamp(paths: Iterable[str]) -> List[tuple[str, str]]:
+    def _timestamp(path: str) -> str:
+        return path.split("_")[-1].split(".")[0]
+
+    return sorted(((path, _timestamp(path)) for path in paths), key=lambda item: item[1])
+
+
+def _load_images(paths: Iterable[str]) -> List[Image.Image]:
+    return [Image.open(path) for path in paths]
+
+
+def _concatenate_horizontally(images: Sequence[Image.Image]) -> Image.Image:
+    if not images:
+        raise ValueError("No images available for stitching")
+
+    widths, heights = zip(*(image.size for image in images))
+    canvas = Image.new("RGB", (sum(widths), max(heights)))
+    offset = 0
+    for image in images:
+        canvas.paste(image, (offset, 0))
+        offset += image.size[0]
+    return canvas
+
+
+__all__ = [
+    "load_model",
+    "predict_image",
+    "predict_image_week_9",
+    "stitch_image",
+    "stitch_image_own",
+]
 

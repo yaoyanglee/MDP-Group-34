@@ -1,260 +1,176 @@
-import time
-import os
+from __future__ import annotations
+
 import logging
+import os
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from algo.algo import MazeSolver 
-from flask import Flask, request, jsonify
+from typing import Any, Dict, Iterable, List, Sequence
+
+from flask import Flask, jsonify, request
 from flask_cors import CORS
-from model import *
+
+from algo.algo import MazeSolver
+from entities.Entity import CellState
 from helper import command_generator
+from model import predict_image_week_9, stitch_image, stitch_image_own
 
-# Setup logging
-LOG_DIR = Path(__file__).resolve().parent / 'logs'
-LOG_DIR.mkdir(exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(LOG_DIR / 'backend.log')
-    ]
-)
-logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-CORS(app)
-# Defer heavy model loading to avoid long startup times
-# model = load_model()
-model = None
+LOGGER = logging.getLogger(__name__)
+UPLOAD_DIRECTORY = Path("uploads")
+MODEL_REFERENCE = None  # Placeholder for future model loading if needed.
 
-@app.route('/status', methods=['GET'])
-def status():
-    """
-    This is a health check endpoint to check if the server is running
-    :return: a json object with a key "result" and value "ok"
-    """
+
+def create_app() -> Flask:
+    application = Flask(__name__)
+    CORS(application)
+    _register_routes(application)
+    return application
+
+
+app = create_app()
+
+
+@dataclass
+class ObstacleForm:
+    x: int
+    y: int
+    d: int
+    id: int
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "ObstacleForm":
+        return cls(
+            x=int(payload["x"]),
+            y=int(payload["y"]),
+            d=int(payload["d"]),
+            id=int(payload["id"]),
+        )
+
+
+@dataclass
+class PlannerRequest:
+    robot_x: int
+    robot_y: int
+    robot_dir: int
+    retrying: Any
+    obstacles: Sequence[ObstacleForm]
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "PlannerRequest":
+        obstacles = [ObstacleForm.from_payload(item) for item in payload.get("obstacles", [])]
+        return cls(
+            robot_x=int(payload["robot_x"]),
+            robot_y=int(payload["robot_y"]),
+            robot_dir=int(payload["robot_dir"]),
+            retrying=payload.get("retrying"),
+            obstacles=obstacles,
+        )
+
+    def as_solver(self) -> MazeSolver:
+        solver = MazeSolver(20, 20, self.robot_x, self.robot_y, self.robot_dir, big_turn=None)
+        for obstacle in self.obstacles:
+            solver.add_obstacle(obstacle.x, obstacle.y, obstacle.d, obstacle.id)
+        return solver
+
+
+def _register_routes(application: Flask) -> None:
+    application.add_url_rule("/status", view_func=_status_handler, methods=["GET"])
+    application.add_url_rule("/path", view_func=_path_handler, methods=["POST"])
+    application.add_url_rule("/image", view_func=_image_handler, methods=["POST"])
+    application.add_url_rule("/stitch", view_func=_stitch_handler, methods=["GET"])
+
+
+def _status_handler():
     return jsonify({"result": "ok"})
 
 
-@app.route('/path', methods=['POST'])
-def path_finding():
-    """
-    This is the main endpoint for the path finding algorithm
-    :return: a json object with a key "data" and value a dictionary with keys "distance", "path", and "commands"
-    """
-    try:
-        # Log incoming request
-        payload = request.get_json(silent=True)
-        logger.info("Received /path request payload: %s", payload)
+def _path_handler():
+    payload = request.get_json(force=True)
+    planner_request = PlannerRequest.from_dict(payload)
+    solver = planner_request.as_solver()
 
-        if not payload:
-            msg = "Empty or invalid JSON payload"
-            logger.warning(msg)
-            return jsonify({
-                "data": {
-                    'distance': 0.0,
-                    'path': [],
-                    'commands': []
-                },
-                "error": msg
-            }), 400
+    start = time.perf_counter()
+    planned_states, travel_cost = solver.get_optimal_order_dp(retrying=planner_request.retrying)
+    elapsed = time.perf_counter() - start
+    LOGGER.info("Path planning finished in %.3fs with cost %.3f", elapsed, travel_cost)
 
-        # Validate required fields
-        required = ['obstacles', 'retrying', 'robot_x', 'robot_y', 'robot_dir']
-        missing = [k for k in required if k not in payload]
-        if missing:
-            msg = f"Missing required fields: {missing}"
-            logger.warning(msg)
-            return jsonify({
-                "data": {
-                    'distance': 0.0,
-                    'path': [],
-                    'commands': []
-                },
-                "error": msg
-            }), 400
+    original_obstacles = [vars(obstacle) for obstacle in planner_request.obstacles]
+    commands = command_generator(planned_states, original_obstacles)
+    trace = _render_state_trace(planned_states, commands)
 
-        # Extract and validate types
-        obstacles = payload['obstacles']
-        retrying = payload.get('retrying', False)
-        try:
-            robot_x = int(payload['robot_x'])
-            robot_y = int(payload['robot_y'])
-            robot_direction = int(payload['robot_dir'])
-        except Exception as e:
-            msg = f"Invalid robot coordinates or direction: {e}"
-            logger.exception(msg)
-            return jsonify({
-                "data": {
-                    'distance': 0.0,
-                    'path': [],
-                    'commands': []
-                },
-                "error": msg
-            }), 400
-
-        # Initialize MazeSolver
-        logger.info("Initializing MazeSolver at x=%s y=%s dir=%s", robot_x, robot_y, robot_direction)
-        maze_solver = MazeSolver(20, 20, robot_x, robot_y, robot_direction, big_turn=None)
-
-        # Add obstacles
-        if not isinstance(obstacles, list):
-            msg = "obstacles must be a list"
-            logger.warning(msg)
-            return jsonify({
-                "data": {
-                    'distance': 0.0,
-                    'path': [],
-                    'commands': []
-                },
-                "error": msg
-            }), 400
-
-        for ob in obstacles:
-            try:
-                maze_solver.add_obstacle(ob['x'], ob['y'], ob['d'], ob['id'])
-            except Exception as e:
-                logger.exception("Failed to add obstacle %s: %s", ob, e)
-                # continue adding others
-
-        start = time.time()
-        # Compute path
-        try:
-            optimal_path, distance = maze_solver.get_optimal_order_dp(retrying=retrying)
-        except Exception as e:
-            logger.exception("Path computation failed: %s", e)
-            return jsonify({
-                "data": {
-                    'distance': 0.0,
-                    'path': [],
-                    'commands': []
-                },
-                "error": f"Path computation failed: {e}"
-            }), 500
-
-        logger.info("Time taken to find shortest path: %s seconds", time.time() - start)
-        logger.info("Distance to travel: %s units", distance)
-
-        # Generate commands
-        try:
-            commands = command_generator(optimal_path, obstacles)
-            print("Generated commands:", commands)
-        except Exception as e:
-            logger.exception("Command generation failed: %s", e)
-            return jsonify({
-                "data": {
-                    'distance': distance,
-                    'path': [p.get_dict() for p in optimal_path] if optimal_path else [],
-                    'commands': []
-                },
-                "error": f"Command generation failed: {e}"
-            }), 500
-
-        # Build path results
-        try:
-            path_results = [optimal_path[0].get_dict()]
-            i = 0
-            for command in commands:
-                if command.startswith("SNAP"):
-                    continue
-                if command.startswith("FIN"):
-                    continue
-                elif command.startswith("FW") or command.startswith("FS"):
-                    i += int(command[2:]) // 10
-                elif command.startswith("BW") or command.startswith("BS"):
-                    i += int(command[2:]) // 10
-                else:
-                    i += 1
-                # guard index
-                if i < 0 or i >= len(optimal_path):
-                    logger.warning("Index out of range while building path_results: i=%s len=%s", i, len(optimal_path))
-                    break
-                path_results.append(optimal_path[i].get_dict())
-        except Exception as e:
-            logger.exception("Failed to build path_results: %s", e)
-            return jsonify({
-                "data": {
-                    'distance': distance,
-                    'path': [],
-                    'commands': commands if 'commands' in locals() else []
-                },
-                "error": f"Failed to build path results: {e}"
-            }), 500
-
-        return jsonify({
+    return jsonify(
+        {
             "data": {
-                'distance': distance,
-                'path': path_results,
-                'commands': commands
+                "distance": travel_cost,
+                "path": trace,
+                "commands": commands,
             },
-            "error": None
-        })
-    except Exception as e:
-        logger.exception("Unhandled exception in /path: %s", e)
-        return jsonify({
-            "data": {
-                'distance': 0.0,
-                'path': [],
-                'commands': []
-            },
-            "error": str(e)
-        }), 500
+            "error": None,
+        }
+    )
 
 
-@app.route('/image', methods=['POST'])
-def image_predict():
-    """
-    This is the main endpoint for the image prediction algorithm
-    :return: a json object with a key "result" and value a dictionary with keys "obstacle_id" and "image_id"
-    """
-    global model
-    # lazy-load model to avoid long startup time
-    if model is None:
-        try:
-            logger.info("Lazy-loading model on first /image request")
-            model = load_model()
-            logger.info("Model loaded successfully")
-        except Exception as e:
-            logger.exception("Failed to load model: %s", e)
-            return jsonify({"error": f"Model load failed: {e}"}), 500
+def _image_handler():
+    ensure_upload_directory()
 
-    file = request.files.get('file')
-    if file is None:
-        return jsonify({"error": "No file provided"}), 400
-    filename = file.filename
-    file.save(os.path.join('uploads', filename))
-    # filename format: "<timestamp>_<obstacle_id>_<signal>.jpeg"
-    constituents = file.filename.split("_")
+    upload = request.files["file"]
+    stored_path = _store_upload(upload.filename, upload.stream.read())
+    constituents = upload.filename.split("_")
     obstacle_id = constituents[1]
 
-    ## Week 8 ## 
-    #signal = constituents[2].strip(".jpg")
-    #image_id = predict_image(filename, model, signal)
+    image_id = predict_image_week_9(stored_path.name, MODEL_REFERENCE)
 
-    ## Week 9 ## 
-    # We don't need to pass in the signal anymore
-    image_id = predict_image_week_9(filename,model)
-
-    # Return the obstacle_id and image_id
-    result = {
+    return jsonify({
         "obstacle_id": obstacle_id,
-        "image_id": image_id
-    }
-    return jsonify(result)
+        "image_id": image_id,
+    })
 
-@app.route('/stitch', methods=['GET'])
-def stitch():
-    """
-    This is the main endpoint for the stitching command. Stitches the images using two different functions, in effect creating two stitches, just for redundancy purposes
-    """
-    img = stitch_image()
-    img.show()
-    img2 = stitch_image_own()
-    img2.show()
+
+def _stitch_handler():
+    first = stitch_image()
+    first.show()
+    second = stitch_image_own()
+    second.show()
     return jsonify({"result": "ok"})
 
-if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5002))
-    print(f"Starting server on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=True)
 
+def ensure_upload_directory() -> None:
+    UPLOAD_DIRECTORY.mkdir(parents=True, exist_ok=True)
+
+
+def _store_upload(filename: str, data: bytes) -> Path:
+    target = UPLOAD_DIRECTORY / filename
+    with target.open("wb") as file_handle:
+        file_handle.write(data)
+    return target
+
+
+def _render_state_trace(states: Sequence[CellState], commands: Sequence[str]) -> List[Dict[str, Any]]:
+    if not states:
+        return []
+
+    cursor = 0
+    indices = [cursor]
+    for command in commands:
+        cursor = _advance_index(cursor, command)
+        if cursor >= len(states):
+            cursor = len(states) - 1
+        indices.append(cursor)
+
+    return [states[index].get_dict() for index in indices]
+
+
+def _advance_index(current: int, command: str) -> int:
+    head = command[:2]
+    if command.startswith("SNAP") or command.startswith("FIN"):
+        return current
+    if head in {"FW", "FS", "BW", "BS"}:
+        magnitude = int(command[2:]) // 10
+        return current + magnitude
+    return current + 1
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    app.run(host="0.0.0.0", port=5002, debug=True)

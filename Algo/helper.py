@@ -1,483 +1,210 @@
-from consts import WIDTH, HEIGHT, Direction, FL_OFFSET, FR_OFFSET, FW_OFFSET, BW_OFFSET, FW_SMALL_OFFSET, BW_SMALL_OFFSET
+from __future__ import annotations
+
+from dataclasses import dataclass
+from itertools import tee
+from typing import Iterable, Iterator, List, Mapping, MutableSequence, Sequence
+
+from consts import HEIGHT, WIDTH, Direction
+
+# Movement
+MOVEMENT_STEP = 10
+TURN_ROTATION = "090"
 
 
-def is_valid(center_x: int, center_y: int):
-    """Checks if given position is within bounds
+@dataclass(frozen=True)
+class TurnDirective:
+    primary: str
+    fallback: str
 
-    Inputs
-    ------
-    center_x (int): x-coordinate
-    center_y (int): y-coordinate
-
-    Returns
-    -------
-    bool: True if valid, False otherwise
-    """
-    return center_x > 0 and center_y > 0 and center_x < WIDTH - 1 and center_y < HEIGHT - 1
+    def command(self, dy: int) -> str:
+        template = self.primary if dy > 0 else self.fallback
+        return f"{template}{TURN_ROTATION}"
 
 
+@dataclass(frozen=True)
+class SnapshotDirective:
+    axis: str
+    positive: str
+    aligned: str
+    negative: str
 
-def command_generator(states, obstacles):
-    """
-    This function takes in a list of states and generates a list of commands for the robot to follow
-    
-    Inputs
-    ------
-    states: list of State objects
-    obstacles: list of obstacles, each obstacle is a dictionary with keys "x", "y", "d", and "id"
+    def suffix(self, delta: int) -> str:
+        if delta > 0:
+            return self.positive
+        if delta == 0:
+            return self.aligned
+        return self.negative
 
-    Returns
-    -------
-    commands: list of commands for the robot to follow
-    """
 
-    # Convert the list of obstacles into a dictionary with key as the obstacle id and value as the obstacle
-    obstacles_dict = {ob['id']: ob for ob in obstacles}
-    
-    # Initialize commands list
-    commands = []
+TURN_LOOKUP: Mapping[tuple[Direction, Direction], TurnDirective] = {
+    (Direction.NORTH, Direction.EAST): TurnDirective("FR", "BL"),
+    (Direction.NORTH, Direction.WEST): TurnDirective("FL", "BR"),
+    (Direction.EAST, Direction.NORTH): TurnDirective("FL", "BR"),
+    (Direction.EAST, Direction.SOUTH): TurnDirective("BL", "FR"),
+    (Direction.SOUTH, Direction.EAST): TurnDirective("BR", "FL"),
+    (Direction.SOUTH, Direction.WEST): TurnDirective("BL", "FR"),
+    (Direction.WEST, Direction.NORTH): TurnDirective("FR", "BL"),
+    (Direction.WEST, Direction.SOUTH): TurnDirective("BR", "FL"),
+}
 
-    # Iterate through each state in the list of states
-    for i in range(1, len(states)):
-        steps = "090"
 
-        # If previous state and current state are the same direction,
-        if states[i].direction == states[i - 1].direction:
-            # Forward - Must be (east facing AND x value increased) OR (north facing AND y value increased)
-            if (states[i].x > states[i - 1].x and states[i].direction == Direction.EAST) or (states[i].y > states[i - 1].y and states[i].direction == Direction.NORTH):
-                commands.append("FW010")
-            # Forward - Must be (west facing AND x value decreased) OR (south facing AND y value decreased)
-            elif (states[i].x < states[i-1].x and states[i].direction == Direction.WEST) or (
-                    states[i].y < states[i-1].y and states[i].direction == Direction.SOUTH):
-                commands.append("FW010")
-            # Backward - All other cases where the previous and current state is the same direction
-            else:
-                commands.append("BW010")
+SNAP_LOOKUP: Mapping[tuple[Direction, Direction], SnapshotDirective] = {
+    (Direction.WEST, Direction.EAST): SnapshotDirective("y", "L", "C", "R"),
+    (Direction.EAST, Direction.WEST): SnapshotDirective("y", "R", "C", "L"),
+    (Direction.NORTH, Direction.SOUTH): SnapshotDirective("x", "L", "C", "R"),
+    (Direction.SOUTH, Direction.NORTH): SnapshotDirective("x", "R", "C", "L"),
+}
 
-            # If any of these states has a valid screenshot ID, then add a SNAP command as well to take a picture
 
-            if states[i].screenshot_id != -1:
-                # NORTH = 0
-                # EAST = 2
-                # SOUTH = 4
-                # WEST = 6
+DIRECTION_UNIT: Mapping[Direction, tuple[int, int]] = {
+    Direction.NORTH: (0, 1),
+    Direction.EAST: (1, 0),
+    Direction.SOUTH: (0, -1),
+    Direction.WEST: (-1, 0),
+}
 
-                current_ob_dict = obstacles_dict[states[i].screenshot_id] # {'x': 9, 'y': 10, 'd': 6, 'id': 9}
-                current_robot_position = states[i] # {'x': 1, 'y': 8, 'd': <Direction.NORTH: 0>, 's': -1}
 
-                # Obstacle facing WEST, robot facing EAST
-                if current_ob_dict['d'] == 6 and current_robot_position.direction == 2:
-                    if current_ob_dict['y'] > current_robot_position.y:
-                        commands.append(f"SNAP{states[i].screenshot_id}_L")
-                    elif current_ob_dict['y'] == current_robot_position.y:
-                        commands.append(f"SNAP{states[i].screenshot_id}_C")
-                    elif current_ob_dict['y'] < current_robot_position.y:
-                        commands.append(f"SNAP{states[i].screenshot_id}_R")
-                    else:
-                        commands.append(f"SNAP{states[i].screenshot_id}")
-                
-                # Obstacle facing EAST, robot facing WEST
-                elif current_ob_dict['d'] == 2 and current_robot_position.direction == 6:
-                    if current_ob_dict['y'] > current_robot_position.y:
-                        commands.append(f"SNAP{states[i].screenshot_id}_R")
-                    elif current_ob_dict['y'] == current_robot_position.y:
-                        commands.append(f"SNAP{states[i].screenshot_id}_C")
-                    elif current_ob_dict['y'] < current_robot_position.y:
-                        commands.append(f"SNAP{states[i].screenshot_id}_L")
-                    else:
-                        commands.append(f"SNAP{states[i].screenshot_id}")
+def is_position_within_arena(center_x: int, center_y: int) -> bool:
+    """Return True when both coordinates lie strictly within the arena walls."""
 
-                # Obstacle facing NORTH, robot facing SOUTH
-                elif current_ob_dict['d'] == 0 and current_robot_position.direction == 4:
-                    if current_ob_dict['x'] > current_robot_position.x:
-                        commands.append(f"SNAP{states[i].screenshot_id}_L")
-                    elif current_ob_dict['x'] == current_robot_position.x:
-                        commands.append(f"SNAP{states[i].screenshot_id}_C")
-                    elif current_ob_dict['x'] < current_robot_position.x:
-                        commands.append(f"SNAP{states[i].screenshot_id}_R")
-                    else:
-                        commands.append(f"SNAP{states[i].screenshot_id}")
+    return _within_bounds(center_x, WIDTH) and _within_bounds(center_y, HEIGHT)
 
-                # Obstacle facing SOUTH, robot facing NORTH
-                elif current_ob_dict['d'] == 4 and current_robot_position.direction == 0:
-                    if current_ob_dict['x'] > current_robot_position.x:
-                        commands.append(f"SNAP{states[i].screenshot_id}_R")
-                    elif current_ob_dict['x'] == current_robot_position.x:
-                        commands.append(f"SNAP{states[i].screenshot_id}_C")
-                    elif current_ob_dict['x'] < current_robot_position.x:
-                        commands.append(f"SNAP{states[i].screenshot_id}_L")
-                    else:
-                        commands.append(f"SNAP{states[i].screenshot_id}")
-            
-            continue
 
-        # If previous state and current state are not the same direction, it means that there will be a turn command involved
-        # Assume there are 4 turning command: FR, FL, BL, BR (the turn command will turn the robot 90 degrees)
-        # FR00 | FR30: Forward Right;
-        # FL00 | FL30: Forward Left;
-        # BR00 | BR30: Backward Right;
-        # BL00 | BL30: Backward Left;
+def is_valid(center_x: int, center_y: int) -> bool:
+    """Provide backwards-compatible validation for historical imports."""
 
-        # Facing north previously
-        if states[i - 1].direction == Direction.NORTH:
-            # Facing east afterwards
-            if states[i].direction == Direction.EAST:
+    return is_position_within_arena(center_x, center_y)
 
-                # remove backwards 
-                '''
-                # y value increased -> Forward Right
-                if states[i].y > states[i - 1].y:
-                    commands.append("FR{}".format(steps))
-                # y value decreased -> Backward Left
-                else:
-                    commands.append("BL{}".format(steps))
-                '''
 
-                commands.append("FR{}".format(steps))
+def command_generator(states: Sequence, obstacles: Iterable[Mapping]) -> List[str]:
+    """Construct the condensed list of robot commands for the given route."""
 
-            # Facing west afterwards
-            elif states[i].direction == Direction.WEST:
+    planner = _CommandPlanner(states, obstacles)
+    return planner.build()
 
-                # remove backwards
-                '''
-                # y value increased -> Forward Left
-                if states[i].y > states[i - 1].y:
-                    commands.append("FL{}".format(steps))
-                # y value decreased -> Backward Right
-                else:
-                    commands.append("BR{}".format(steps))
-                '''
 
-                commands.append("FL{}".format(steps))
-            else:
-                raise Exception("Invalid turning direction")
+class _CommandPlanner:
+    __slots__ = ("_states", "_obstacles", "_commands")
 
-        elif states[i - 1].direction == Direction.EAST:
-            if states[i].direction == Direction.NORTH:
+    def __init__(self, states: Sequence, obstacles: Iterable[Mapping]) -> None:
+        self._states = list(states)
+        self._obstacles = {payload["id"]: payload for payload in obstacles}
+        self._commands: MutableSequence[str] = []
 
-                # remove backwards
-                '''
-                if states[i].y > states[i - 1].y:
-                    commands.append("FL{}".format(steps))
-                else:
-                    commands.append("BR{}".format(steps))
-                '''
+    def build(self) -> List[str]:
+        if not self._states:
+            return ["FIN"]
 
-                commands.append("FL{}".format(steps))
+        for previous, current in _pairwise(self._states):
+            self._record_transition(previous, current)
+            self._record_snapshot(current)
 
-            elif states[i].direction == Direction.SOUTH:
+        self._commands.append("FIN")
+        return _compress_commands(self._commands)
 
-                # remove backwards
-                '''
-                if states[i].y > states[i - 1].y:
-                    commands.append("BL{}".format(steps))
-                else:
-                    commands.append("FR{}".format(steps))
-                '''
-
-                commands.append("FR{}".format(steps))
-            else:
-                raise Exception("Invalid turing direction")
-
-        elif states[i - 1].direction == Direction.SOUTH:
-            if states[i].direction == Direction.EAST:
-
-                # remove reverse
-                '''
-                if states[i].y > states[i - 1].y:
-                    commands.append("BR{}".format(steps))
-                else:
-                    commands.append("FL{}".format(steps))
-                '''
-
-                commands.append("FL{}".format(steps))
-
-            elif states[i].direction == Direction.WEST:
-
-                # remove reverse
-                '''
-                if states[i].y > states[i - 1].y:
-                    commands.append("BL{}".format(steps))
-                else:
-                    commands.append("FR{}".format(steps))
-                '''
-
-                commands.append("FR{}".format(steps))
-            else:
-                raise Exception("Invalid turing direction")
-
-        elif states[i - 1].direction == Direction.WEST:
-            if states[i].direction == Direction.NORTH:
-
-                # remove backwards
-                '''
-                if states[i].y > states[i - 1].y:
-                    commands.append("FR{}".format(steps))
-                else:
-                    commands.append("BL{}".format(steps))
-                '''
-
-                commands.append("FR{}".format(steps))
-
-            elif states[i].direction == Direction.SOUTH:
-
-                # remove backwards
-                '''
-                if states[i].y > states[i - 1].y:
-                    commands.append("BR{}".format(steps))
-                else:
-                    commands.append("FL{}".format(steps))
-                '''
-                commands.append("FL{}".format(steps))
-                
-            else:
-                raise Exception("Invalid turing direction")
+    def _record_transition(self, previous, current) -> None:
+        hop = _Transition(previous, current)
+        if hop.same_heading:
+            command = _linear_motion(hop)
         else:
-            raise Exception("Invalid position")
+            command = _turn_command(hop)
 
-        # If any of these states has a valid screenshot ID, then add a SNAP command as well to take a picture
-        
-        if states[i].screenshot_id != -1:  
-            # NORTH = 0
-            # EAST = 2
-            # SOUTH = 4
-            # WEST = 6
+        if command:
+            self._commands.append(command)
 
-            current_ob_dict = obstacles_dict[states[i].screenshot_id] # {'x': 9, 'y': 10, 'd': 6, 'id': 9}
-            current_robot_position = states[i] # {'x': 1, 'y': 8, 'd': <Direction.NORTH: 0>, 's': -1}
+    def _record_snapshot(self, state) -> None:
+        if getattr(state, "screenshot_id", -1) == -1:
+            return
 
-            # Obstacle facing WEST, robot facing EAST
-            if current_ob_dict['d'] == 6 and current_robot_position.direction == 2:
-                if current_ob_dict['y'] > current_robot_position.y:
-                    commands.append(f"SNAP{states[i].screenshot_id}_L")
-                elif current_ob_dict['y'] == current_robot_position.y:
-                    commands.append(f"SNAP{states[i].screenshot_id}_C")
-                elif current_ob_dict['y'] < current_robot_position.y:
-                    commands.append(f"SNAP{states[i].screenshot_id}_R")
-                else:
-                    commands.append(f"SNAP{states[i].screenshot_id}")
-            
-            # Obstacle facing EAST, robot facing WEST
-            elif current_ob_dict['d'] == 2 and current_robot_position.direction == 6:
-                if current_ob_dict['y'] > current_robot_position.y:
-                    commands.append(f"SNAP{states[i].screenshot_id}_R")
-                elif current_ob_dict['y'] == current_robot_position.y:
-                    commands.append(f"SNAP{states[i].screenshot_id}_C")
-                elif current_ob_dict['y'] < current_robot_position.y:
-                    commands.append(f"SNAP{states[i].screenshot_id}_L")
-                else:
-                    commands.append(f"SNAP{states[i].screenshot_id}")
+        self._commands.append(_snapshot_command(state, self._obstacles))
 
-            # Obstacle facing NORTH, robot facing SOUTH
-            elif current_ob_dict['d'] == 0 and current_robot_position.direction == 4:
-                if current_ob_dict['x'] > current_robot_position.x:
-                    commands.append(f"SNAP{states[i].screenshot_id}_L")
-                elif current_ob_dict['x'] == current_robot_position.x:
-                    commands.append(f"SNAP{states[i].screenshot_id}_C")
-                elif current_ob_dict['x'] < current_robot_position.x:
-                    commands.append(f"SNAP{states[i].screenshot_id}_R")
-                else:
-                    commands.append(f"SNAP{states[i].screenshot_id}")
 
-            # Obstacle facing SOUTH, robot facing NORTH
-            elif current_ob_dict['d'] == 4 and current_robot_position.direction == 0:
-                if current_ob_dict['x'] > current_robot_position.x:
-                    commands.append(f"SNAP{states[i].screenshot_id}_R")
-                elif current_ob_dict['x'] == current_robot_position.x:
-                    commands.append(f"SNAP{states[i].screenshot_id}_C")
-                elif current_ob_dict['x'] < current_robot_position.x:
-                    commands.append(f"SNAP{states[i].screenshot_id}_L")
-                else:
-                    commands.append(f"SNAP{states[i].screenshot_id}")
-        
+@dataclass(frozen=True)
+class _Transition:
+    previous: object
+    current: object
 
-    # Final command is the stop command (FIN)
-    commands.append("FIN") 
-    # print(commands) 
+    @property
+    def same_heading(self) -> bool:
+        return self.previous.direction == self.current.direction
 
-    # Compress commands if there are consecutive forward or backward commands
-    compressed_commands = [commands[0]]
+    @property
+    def dx(self) -> int:
+        return self.current.x - self.previous.x
 
-    for i in range(1, len(commands)):
-        # If both commands are BW
-        if commands[i].startswith("BW") and compressed_commands[-1].startswith("BW"):
-            # Get the number of steps of previous command
-            steps = int(compressed_commands[-1][2:])
-            # If steps are not 90, add 10 to the steps
-            if steps < 90:
-                compressed_commands[-1] = "BW0{}".format(steps + 10)
-                continue
-            else:
-                compressed_commands[-1] = "BW{}".format(steps + 10)
-                continue
+    @property
+    def dy(self) -> int:
+        return self.current.y - self.previous.y
 
-        # If both commands are FW
-        elif commands[i].startswith("FW") and compressed_commands[-1].startswith("FW"):
-            # Get the number of steps of previous command
-            steps = int(compressed_commands[-1][2:])
-            # If steps are not 90, add 10 to the steps
-            if steps < 90:
-                compressed_commands[-1] = "FW0{}".format(steps + 10)
-                continue
-            else:
-                compressed_commands[-1] = "FW{}".format(steps + 10)
-                continue
-    
-        
-        # If command is forward left
-        elif commands[i].startswith("FL"):
-            # remove/add y offset to the previous command
-            if FL_OFFSET[1] > 0:
-                compressed_commands.append("BW00{}".format(FL_OFFSET[1]))
+    def projection_along_heading(self) -> int:
+        vector = DIRECTION_UNIT[self.previous.direction]
+        return self.dx * vector[0] + self.dy * vector[1]
 
-            # add turn command
-            compressed_commands.append(commands[i])
 
-            # remove/add x offset after the 
-            if FL_OFFSET[0] > 0:
-                if 10 - FL_OFFSET[0] < 10:
-                    compressed_commands.append("BW00{}".format(10 - FL_OFFSET[0]))
-                else:
-                    compressed_commands.append("BW0{}".format(10 - FL_OFFSET[0]))
+def _linear_motion(transition: _Transition) -> str:
+    displacement = transition.projection_along_heading()
+    if displacement > 0:
+        return _format_distance_command("FW", MOVEMENT_STEP)
+    if displacement < 0:
+        return _format_distance_command("BW", MOVEMENT_STEP)
+    return _format_distance_command("BW", MOVEMENT_STEP)
 
-            continue
 
-            
-        # If command is forward left
-        elif commands[i].startswith("FR"):
-            # remove/add y offset to the previous command
-            if FR_OFFSET[1] > 0:
-                compressed_commands.append("BW00{}".format(FR_OFFSET[1]))
+def _turn_command(transition: _Transition) -> str:
+    key = (transition.previous.direction, transition.current.direction)
+    directive = TURN_LOOKUP.get(key)
+    if directive is None:
+        raise ValueError(f"Invalid turning direction: {key}")
+    return directive.command(transition.dy)
 
-            # add turn command
-            compressed_commands.append(commands[i])
 
-            # remove/add x offset after the turn
-            if FR_OFFSET[0] > 0:
-                if 10 - FR_OFFSET[0] < 10:
-                    compressed_commands.append("FW00{}".format(10 - FR_OFFSET[0]))
-                else:
-                    compressed_commands.append("FW0{}".format(10 - FR_OFFSET[0]))
+def _snapshot_command(state, obstacles: Mapping[int, Mapping]) -> str:
+    obstacle = obstacles.get(state.screenshot_id)
+    base = f"SNAP{state.screenshot_id}"
+    if obstacle is None:
+        return base
 
-            continue
+    directive = SNAP_LOOKUP.get((Direction(obstacle["d"]), state.direction))
+    if directive is None:
+        return base
 
-        # Otherwise, just add as usual
-        compressed_commands.append(commands[i])
+    obstacle_value = obstacle[directive.axis]
+    robot_value = getattr(state, directive.axis)
+    suffix = directive.suffix(obstacle_value - robot_value)
+    return f"{base}_{suffix}"
 
-    # print(f"Compressed commands: {compressed_commands}")
-    # Merge consecutive FW and BW commands
-    merge_commands = [compressed_commands[0]]
 
-    for i in range (1, len(compressed_commands)):
-        # If previous command is BW and current command is FW
-        if compressed_commands[i].startswith("FW") and merge_commands[-1].startswith("BW"):
-            # Get the number of steps of previous command and current command
-            prev_steps = int(merge_commands[-1][2:])
-            curr_steps = int(compressed_commands[i][2:])
+def _pairwise(collection: Sequence) -> Iterator[tuple[object, object]]:
+    first, second = tee(collection)
+    next(second, None)
+    return zip(first, second)
 
-            # if BW > FW distance
-            if prev_steps > curr_steps:
-                if prev_steps - curr_steps < 10:
-                    merge_commands[-1] = "BW00{}".format(prev_steps - curr_steps)
-                elif prev_steps - curr_steps < 100:
-                    merge_commands[-1] = "BW0{}".format(prev_steps - curr_steps)
-                else:
-                    merge_commands[-1] = "BW{}".format(prev_steps - curr_steps)
-            # if FW > BW distance
-            elif curr_steps > prev_steps:
-                if curr_steps - prev_steps < 10:
-                    merge_commands[-1] = "FW00{}".format(curr_steps - prev_steps)
-                elif curr_steps - prev_steps < 100:
-                    merge_commands[-1] = "FW0{}".format(curr_steps - prev_steps)
-                else:
-                    merge_commands[-1] = "FW{}".format(curr_steps - prev_steps)
-            
-            else:
-                merge_commands.pop()
 
-        # If previous command is BW and current command is FW
-        elif compressed_commands[i].startswith("BW") and merge_commands[-1].startswith("FW"):
-            # Get the number of steps of previous command and current command
-            prev_steps = int(merge_commands[-1][2:])
-            curr_steps = int(compressed_commands[i][2:])
+def _format_distance_command(prefix: str, step: int) -> str:
+    return f"{prefix}{step:03d}"
 
-            # if FW > BW distance
-            if prev_steps > curr_steps:
-                if prev_steps - curr_steps < 10:
-                    merge_commands[-1] = "FW00{}".format(prev_steps - curr_steps)
-                elif prev_steps - curr_steps < 100:
-                    merge_commands[-1] = "FW0{}".format(prev_steps - curr_steps)
-                else:
-                    merge_commands[-1] = "FW{}".format(prev_steps - curr_steps)
-            # if BW > FW distance
-            elif curr_steps > prev_steps:
-                if curr_steps - prev_steps < 10:
-                    merge_commands[-1] = "BW00{}".format(curr_steps - prev_steps)
-                elif curr_steps - prev_steps < 100:
-                    merge_commands[-1] = "BW0{}".format(curr_steps - prev_steps)
-                else:
-                    merge_commands[-1] = "BW{}".format(curr_steps - prev_steps)
-            
-            else:
-                merge_commands.pop()
 
-        # If previous command is BW and current command is BW
-        elif compressed_commands[i].startswith("BW") and merge_commands[-1].startswith("BW"):
-            # Get the number of steps of previous command and current command
-            prev_steps = int(merge_commands[-1][2:])
-            curr_steps = int(compressed_commands[i][2:])
-            if prev_steps + curr_steps < 10:
-                merge_commands[-1] = "BW00{}".format(prev_steps + curr_steps)
-            elif prev_steps + curr_steps < 100:
-                merge_commands[-1] = "BW0{}".format(prev_steps + curr_steps)
-            else:
-                merge_commands[-1] = "BW{}".format(prev_steps + curr_steps)
+def _compress_commands(commands: Sequence[str]) -> List[str]:
+    if not commands:
+        return []
 
-        # If previous command is FW and current command is FW
-        elif compressed_commands[i].startswith("FW") and merge_commands[-1].startswith("FW"):
-            # Get the number of steps of previous command and current command
-            prev_steps = int(merge_commands[-1][2:])
-            curr_steps = int(compressed_commands[i][2:])
-            if prev_steps + curr_steps < 10:
-                merge_commands[-1] = "FW00{}".format(prev_steps + curr_steps)
-            elif prev_steps + curr_steps < 100:
-                merge_commands[-1] = "FW0{}".format(prev_steps + curr_steps)
-            else:
-                merge_commands[-1] = "FW{}".format(prev_steps + curr_steps)
-
-        # Otherwise, just add as usual
+    merged: List[str] = []
+    for command in commands:
+        if merged and _mergeable(merged[-1], command):
+            merged[-1] = _merge_distance(merged[-1], command)
         else:
-            merge_commands.append(compressed_commands[i])
+            merged.append(command)
+    return merged
 
-    print(f"Merge commands: {merge_commands}")
 
-    # Account for forwards and backwards offset
-    for i in range(0, len(merge_commands)):
-        # If command is FW
-        if merge_commands[i].startswith("FW"):
-            # Get the number of steps
-            steps = int(merge_commands[i][2:])
-            if steps >= 10:
-                if steps - FW_OFFSET < 10:
-                    merge_commands[i] = "FW00{}".format(steps - FW_OFFSET)
-                elif steps - FW_OFFSET < 100:
-                    merge_commands[i] = "FW0{}".format(steps - FW_OFFSET)
-                else:
-                    merge_commands[i] = "FW{}".format(steps - FW_OFFSET)
-            elif steps >= 5:
-                merge_commands[i] = "FW00{}".format(steps - FW_SMALL_OFFSET)
+def _mergeable(first: str, second: str) -> bool:
+    return first[:2] in {"FW", "BW"} and first[:2] == second[:2]
 
-        elif merge_commands[i].startswith("BW"):
-            # Get the number of steps
-            steps = int(merge_commands[i][2:])
-            if steps >= 10:
-                if steps - BW_OFFSET < 10:
-                    merge_commands[i] = "BW00{}".format(steps - BW_OFFSET)
-                elif steps - BW_OFFSET < 100:
-                    merge_commands[i] = "BW0{}".format(steps - BW_OFFSET)
-                else:
-                    merge_commands[i] = "BW{}".format(steps - BW_OFFSET)
-            elif steps >= 5:
-                merge_commands[i] = "BW00{}".format(steps - BW_SMALL_OFFSET)
 
-    return merge_commands
+def _merge_distance(first: str, second: str) -> str:
+    total = int(first[2:]) + int(second[2:])
+    return f"{first[:2]}{total:03d}"
+
+
+def _within_bounds(coordinate: int, upper_bound: int) -> bool:
+    return 0 < coordinate < upper_bound - 1

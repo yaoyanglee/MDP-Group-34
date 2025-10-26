@@ -1,64 +1,104 @@
-from enum import Enum
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import IntEnum
+from typing import Iterable, Tuple
 
 
-class Direction(int, Enum):
-    NORTH = 0
-    EAST = 2
-    SOUTH = 4
-    WEST = 6
-    SKIP = 8
+class _Compass(IntEnum):
+    """Internal helper for expressing compass bearings as integers."""
 
-    def __int__(self):
-        return self.value
+    def __new__(cls, quarter_index: int, offset: Tuple[int, int]):  # type: ignore[override]
+        obj = int.__new__(cls, quarter_index)
+        obj._value_ = quarter_index
+        obj._offset = offset
+        return obj
+
+    @property
+    def vector(self) -> Tuple[int, int]:
+        return self._offset
+
+    def quarter_turn_distance(self, other: "_Compass") -> int:
+        delta = abs(int(self) - int(other))
+        return min(delta, 8 - delta)
+
+
+class Direction(_Compass):
+    NORTH = (0, (0, 1))
+    EAST = (2, (1, 0))
+    SOUTH = (4, (0, -1))
+    WEST = (6, (-1, 0))
+    SKIP = (8, (0, 0))
+
+    def __int__(self) -> int:  # pragma: no cover - simple passthrough
+        return int(super())
 
     @staticmethod
-    def rotation_cost(d1, d2):
-        diff = abs(d1 - d2)
-        return min(diff, 8 - diff)
+    def rotation_cost(first: "Direction | int", second: "Direction | int") -> int:
+        heading_a = Direction(first)
+        heading_b = Direction(second)
+        return heading_a.quarter_turn_distance(heading_b)
 
-MOVE_DIRECTION = [
-    (1, 0, Direction.EAST),
-    (-1, 0, Direction.WEST),
-    (0, 1, Direction.NORTH),
-    (0, -1, Direction.SOUTH),
+
+@dataclass(frozen=True)
+class _ArenaSpec:
+    width: int
+    height: int
+
+
+@dataclass(frozen=True)
+class _RobotTuning:
+    turn_factor: int
+    expanded_cell: int
+    iterations: int
+    turn_radius: int
+    safe_cost: int
+    screenshot_cost: int
+
+
+ARENA = _ArenaSpec(width=20, height=20)
+SETTINGS = _RobotTuning(
+    turn_factor=1,
+    expanded_cell=1,
+    iterations=2000,
+    turn_radius=1,
+    safe_cost=1000,
+    screenshot_cost=50,
+)
+
+
+def _movement_sequence() -> Tuple[Tuple[int, int, Direction], ...]:
+    ordering: Iterable[Direction] = (
+        Direction.EAST,
+        Direction.WEST,
+        Direction.NORTH,
+        Direction.SOUTH,
+    )
+    return tuple(
+        (direction.vector[0], direction.vector[1], direction)
+        for direction in ordering
+    )
+
+
+MOVE_DIRECTION = list(_movement_sequence())
+TURN_FACTOR = SETTINGS.turn_factor
+EXPANDED_CELL = SETTINGS.expanded_cell
+WIDTH = ARENA.width
+HEIGHT = ARENA.height
+ITERATIONS = SETTINGS.iterations
+TURN_RADIUS = SETTINGS.turn_radius
+SAFE_COST = SETTINGS.safe_cost
+SCREENSHOT_COST = SETTINGS.screenshot_cost
+
+__all__ = [
+    "Direction",
+    "MOVE_DIRECTION",
+    "TURN_FACTOR",
+    "EXPANDED_CELL",
+    "WIDTH",
+    "HEIGHT",
+    "ITERATIONS",
+    "TURN_RADIUS",
+    "SAFE_COST",
+    "SCREENSHOT_COST",
 ]
-
-TURN_FACTOR = 1
-
-EXPANDED_CELL = 1 # for both agent and obstacles
-
-WIDTH = 20
-HEIGHT = 20
-
-ITERATIONS = 2000
-# TURN_RADIUS = 1
-TURN_RADIUS = 1
-
-SAFE_COST = 1000 # the cost for the turn in case there is a chance that the robot is touch some obstacle
-SCREENSHOT_COST = 50 # the cost for the place where the picture is taken
-
-
-# 8, 4 (45 45 turn)
-# FL_OFFSET = (8, 4)
-# 30, 15 (90 turn)
-FL_OFFSET = (0, 5)
-
-# 5, 13 (45 45 turn)
-# FR_OFFSET = (5, 3)
-# (90 turn)
-FR_OFFSET = (0, 5)
-
-FW_SMALL_OFFSET = 2
-BW_SMALL_OFFSET = 2
-FW_OFFSET = 5
-BW_OFFSET = 4
-
-# no offset
-'''
-FL_OFFSET = (0, 0)
-FR_OFFSET = (0, 0)
-
-FW_SMALL_OFFSET = 0
-FW_OFFSET = 0
-BW_OFFSET = 0
-'''

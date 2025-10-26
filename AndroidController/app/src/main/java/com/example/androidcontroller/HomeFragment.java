@@ -436,6 +436,7 @@ public class HomeFragment extends Fragment{
         });
 
         // DEBUGGING BUTTONS
+        /*
         Button btnFW10 = rootview.findViewById(R.id.temp_btnFW10);
         btnFW10.setOnClickListener(v -> {sendDirectionCmdIntent("FW10");});
         Button btnBT10 = rootview.findViewById(R.id.temp_btnBW10);
@@ -448,7 +449,7 @@ public class HomeFragment extends Fragment{
         btnBL00.setOnClickListener(v -> {sendDirectionCmdIntent("BL00");});
         Button btnBR00 = rootview.findViewById(R.id.temp_btnBR00);
         btnBR00.setOnClickListener(v->{sendDirectionCmdIntent("BR00");});
-
+         */
         // Inflate the layout for this fragment
         return rootview;
     }

@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingTop="8dp"
+    android:paddingBottom="12dp"
+    android:divider="?android:attr/dividerHorizontal"
+    android:showDividers="middle">
+
+    <TextView
+        android:id="@+id/manualControlTextView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Robot Controls"
+        android:textStyle="bold"
+        android:textSize="16sp"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Two-column layout for left (controls/info) + right (switches/start) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:weightSum="2"
+        android:divider="?android:attr/dividerHorizontal"
+        android:showDividers="middle">
+
+        <!-- LEFT COLUMN -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
+
+            <!-- Arrow Controls -->
+            <RelativeLayout
+                android:layout_width="wrap_content"
+                android:layout_height="120dp"
+                android:layout_gravity="center_horizontal">
+
+                <ImageButton
+                    android:id="@+id/upArrowBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_centerHorizontal="true"
+                    android:src="@drawable/ic_arrow_up"
+                    android:contentDescription="Up" />
+
+                <ImageButton
+                    android:id="@+id/leftArrowBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_centerVertical="true"
+                    android:layout_alignParentStart="true"
+                    android:src="@drawable/ic_arrow_left"
+                    android:contentDescription="Left" />
+
+                <ImageButton
+                    android:id="@+id/rightArrowBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_centerVertical="true"
+                    android:layout_alignParentEnd="true"
+                    android:src="@drawable/ic_arrow_right"
+                    android:contentDescription="Right" />
+
+                <ImageButton
+                    android:id="@+id/downArrowBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_alignParentBottom="true"
+                    android:layout_centerHorizontal="true"
+                    android:src="@drawable/ic_arrow_down"
+                    android:contentDescription="Down" />
+            </RelativeLayout>
+
+            <!-- Robot Info -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="8dp"
+                android:paddingHorizontal="8dp">
+
+                <TextView
+                    android:id="@+id/robot_x_value"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="X:" />
+
+                <TextView
+                    android:id="@+id/robot_y_value"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Y:" />
+
+                <TextView
+                    android:id="@+id/robotDirText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Facing:" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- RIGHT COLUMN -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:paddingStart="12dp"
+            android:gravity="center_horizontal">
+
+            <!-- Switches -->
+            <Switch
+                android:id="@+id/switch_manualMode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Manual Mode" />
+
+            <Switch
+                android:id="@+id/switch_outdoor"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Outdoor Arena" />
+
+            <Switch
+                android:id="@+id/switch_turnmode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Big Turn" />
+
+            <!-- Start Buttons -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="12dp"
+                android:weightSum="2">
+
+                <Button
+                    android:id="@+id/btnStartFastestCar"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Start Fastest Car"
+                    android:textSize="12sp"
+                    android:drawableStart="@drawable/ic_baseline_timer_24"
+                    android:background="@drawable/rounded_button"
+                    android:textColor="@android:color/white"
+                    android:layout_marginEnd="4dp"
+                    android:layout_gravity="center_vertical"
+                    android:gravity="center"
+                    android:paddingVertical="8dp"
+                    android:minHeight="48dp"
+                    android:drawablePadding="8dp" />
+
+                <Button
+                    android:id="@+id/btnStartImageRec"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Start Image Rec"
+                    android:textSize="12sp"
+                    android:drawableStart="@drawable/ic_baseline_image_search_24"
+                    android:background="@drawable/rounded_button"
+                    android:textColor="@android:color/white"
+                    android:layout_marginStart="4dp"
+                    android:layout_gravity="center_vertical"
+                    android:gravity="center"
+                    android:paddingVertical="8dp"
+                    android:minHeight="48dp"
+                    android:drawablePadding="8dp" />
+
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

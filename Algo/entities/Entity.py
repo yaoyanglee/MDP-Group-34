@@ -1,434 +1,191 @@
-from typing import List
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, List, Sequence, Tuple
+
 from consts import Direction, EXPANDED_CELL, SCREENSHOT_COST
-from helper import is_valid
+from helper import is_position_within_arena
 
 
+SAFETY_RING = EXPANDED_CELL * 2
+
+
+@dataclass(eq=False)
 class CellState:
-    """Base class for all objects on the arena, such as cells, obstacles, etc"""
+    """Normalized representation of a board position with orientation."""
 
-    def __init__(self, x, y, direction: Direction = Direction.NORTH, screenshot_id=-1, penalty=0):
-        self.x = x
-        self.y = y
-        self.direction = direction
-        # If screenshot_od != -1, the snapshot is taken at that position is for the obstacle with id = screenshot_id
-        self.screenshot_id = screenshot_id
-        self.penalty = penalty  # Penalty for the view point of taking picture
+    x: int
+    y: int
+    direction: Direction = Direction.NORTH
+    screenshot_id: int = -1
+    penalty: int = 0
 
-    def cmp_position(self, x, y) -> bool:
-        """Compare given (x,y) position with cell state's position
-
-        Args:
-            x (int): x coordinate
-            y (int): y coordinate
-
-        Returns:
-            bool: True if same, False otherwise
-        """
+    def cmp_position(self, x: int, y: int) -> bool:
         return self.x == x and self.y == y
 
-    def is_eq(self, x, y, direction):
-        """Compare given x, y, direction with cell state's position and direction
-
-        Args:
-            x (int): x coordinate
-            y (int): y coordinate
-            direction (Direction): direction of cell
-
-        Returns:
-            bool: True if same, False otherwise
-        """
+    def is_eq(self, x: int, y: int, direction: Direction) -> bool:
         return self.x == x and self.y == y and self.direction == direction
 
-    def __repr__(self):
-        return "x: {}, y: {}, d: {}, screenshot: {}".format(self.x, self.y, self.direction, self.screenshot_id)
-
-    def set_screenshot(self, screenshot_id):
-        """Set screenshot id for cell
-
-        Args:
-            screenshot_id (int): screenshot id of cell
-        """
+    def set_screenshot(self, screenshot_id: int) -> None:
         self.screenshot_id = screenshot_id
 
-    def get_dict(self):
-        """Returns a dictionary representation of the cell
+    def get_dict(self) -> Dict[str, int | Direction]:
+        return {"x": self.x, "y": self.y, "d": self.direction, "s": self.screenshot_id}
 
-        Returns:
-            dict: {x,y,direction,screeshot_id}
-        """
-        return {'x': self.x, 'y': self.y, 'd': self.direction, 's': self.screenshot_id}
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return (
+            f"CellState(x={self.x}, y={self.y}, direction={self.direction}, "
+            f"screenshot={self.screenshot_id}, penalty={self.penalty})"
+        )
+
+
+def _compile_view_offsets() -> Dict[Direction, Dict[bool, Tuple[Tuple[int, int, Direction, int], ...]]]:
+    vertical_front = (
+        (0, 1 + SAFETY_RING, Direction.SOUTH, 10),
+        (0, 2 + SAFETY_RING, Direction.SOUTH, 5),
+        (0, 3 + SAFETY_RING, Direction.SOUTH, 0),
+        (1, 2 + SAFETY_RING, Direction.SOUTH, SCREENSHOT_COST),
+        (-1, 2 + SAFETY_RING, Direction.SOUTH, SCREENSHOT_COST),
+    )
+    vertical_retry = (
+        (0, 2 + SAFETY_RING, Direction.SOUTH, 0),
+        (0, 3 + SAFETY_RING, Direction.SOUTH, 0),
+        (1, 2 + SAFETY_RING, Direction.SOUTH, SCREENSHOT_COST),
+        (-1, 2 + SAFETY_RING, Direction.SOUTH, SCREENSHOT_COST),
+    )
+    horizontal_front = (
+        (1 + SAFETY_RING, 0, Direction.WEST, 10),
+        (2 + SAFETY_RING, 0, Direction.WEST, 5),
+        (3 + SAFETY_RING, 0, Direction.WEST, 0),
+        (2 + SAFETY_RING, 1, Direction.WEST, SCREENSHOT_COST),
+        (2 + SAFETY_RING, -1, Direction.WEST, SCREENSHOT_COST),
+    )
+    horizontal_retry = (
+        (2 + SAFETY_RING, 0, Direction.WEST, 0),
+        (3 + SAFETY_RING, 0, Direction.WEST, 0),
+        (2 + SAFETY_RING, 1, Direction.WEST, SCREENSHOT_COST),
+        (2 + SAFETY_RING, -1, Direction.WEST, SCREENSHOT_COST),
+    )
+
+    def mirror_vertical(entries: Sequence[Tuple[int, int, Direction, int]]) -> Tuple[Tuple[int, int, Direction, int], ...]:
+        return tuple((dx, -dy, Direction.NORTH, cost) for dx, dy, _facing, cost in entries)
+
+    def mirror_horizontal(entries: Sequence[Tuple[int, int, Direction, int]]) -> Tuple[Tuple[int, int, Direction, int], ...]:
+        return tuple((-dx, dy, Direction.EAST, cost) for dx, dy, _facing, cost in entries)
+
+    return {
+        Direction.NORTH: {False: vertical_front, True: vertical_retry},
+        Direction.SOUTH: {False: mirror_vertical(vertical_front), True: mirror_vertical(vertical_retry)},
+        Direction.EAST: {False: horizontal_front, True: horizontal_retry},
+        Direction.WEST: {False: mirror_horizontal(horizontal_front), True: mirror_horizontal(horizontal_retry)},
+    }
+
+
+VIEW_OFFSETS = _compile_view_offsets()
 
 
 class Obstacle(CellState):
-    """Obstacle class, inherited from CellState"""
+    """Concrete obstacle that reuses CellState behaviour."""
 
     def __init__(self, x: int, y: int, direction: Direction, obstacle_id: int):
         super().__init__(x, y, direction)
         self.obstacle_id = obstacle_id
 
-    def __eq__(self, other):
-        """Checks if this obstacle is the same as input in terms of x, y, and direction
-
-        Args:
-            other (Obstacle): input obstacle to compare to
-
-        Returns:
-            bool: True if same, False otherwise
-        """
+    def __eq__(self, other: object) -> bool:  # pragma: no cover - direct coord comparison
+        if not isinstance(other, Obstacle):
+            return NotImplemented
         return self.x == other.x and self.y == other.y and self.direction == other.direction
 
     def get_view_state(self, retrying) -> List[CellState]:
-        """Constructs the list of CellStates from which the robot can view the symbol on the obstacle
+        relative_positions = VIEW_OFFSETS.get(self.direction, {}).get(bool(retrying), ())
+        return [
+            _build_state(self, offset_x, offset_y, facing, cost)
+            for offset_x, offset_y, facing, cost in relative_positions
+            if is_position_within_arena(self.x + offset_x, self.y + offset_y)
+        ]
 
-        Returns:
-            List[CellState]: Valid cell states where robot can be positioned to view the symbol on the obstacle
-        """
-        cells = []
 
-        # If the obstacle is facing north, then robot's cell state must be facing south
-        if self.direction == Direction.NORTH:
-            if retrying == False:
-                # Or (x, y + 3)
-                if is_valid(self.x, self.y + 1 + EXPANDED_CELL * 2):
-                    cells.append(CellState(
-                        self.x, self.y + 1 + EXPANDED_CELL * 2, Direction.SOUTH, self.obstacle_id, 10))
-                # Or (x, y + 4)
-                if is_valid(self.x, self.y + 2 + EXPANDED_CELL * 2):
-                    cells.append(CellState(
-                        self.x, self.y + 2 + EXPANDED_CELL * 2, Direction.SOUTH, self.obstacle_id, 5))
-
-                # Or (x, y + 5)  
-                if is_valid(self.x, self.y + 3 + EXPANDED_CELL * 2):
-                    cells.append(CellState(
-                        self.x, self.y + 3 + EXPANDED_CELL * 2, Direction.SOUTH, self.obstacle_id, 0))
-
-                # Or (x + 1, y + 3)
-                # if is_valid(self.x + 1, self.y + 1 + EXPANDED_CELL * 2):
-                #     cells.append(CellState(self.x + 1, self.y + 1 + EXPANDED_CELL * 2, Direction.SOUTH, self.obstacle_id, SCREENSHOT_COST*10))
-                # # Or (x - 1, y + 3)
-                # if is_valid(self.x - 1, self.y + 1 + EXPANDED_CELL * 2):
-                #     cells.append(CellState(self.x - 1, self.y + 1 + EXPANDED_CELL * 2, Direction.SOUTH, self.obstacle_id, SCREENSHOT_COST*10))
-
-                # Or (x + 1, y + 4)
-                if is_valid(self.x + 1, self.y + 2 + EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x + 1, self.y + 2 + EXPANDED_CELL *
-                                 2, Direction.SOUTH, self.obstacle_id, SCREENSHOT_COST))
-                # Or (x - 1, y + 4)
-                if is_valid(self.x - 1, self.y + 2 + EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x - 1, self.y + 2 + EXPANDED_CELL *
-                                 2, Direction.SOUTH, self.obstacle_id, SCREENSHOT_COST))
-
-            elif retrying == True:
-                # Or (x, y + 4)
-                if is_valid(self.x, self.y + 2 + EXPANDED_CELL * 2):
-                    cells.append(CellState(
-                        self.x, self.y + 2 + EXPANDED_CELL * 2, Direction.SOUTH, self.obstacle_id, 0))
-                # Or (x, y + 5)
-                if is_valid(self.x, self.y + 3 + EXPANDED_CELL * 2):
-                    cells.append(CellState(
-                        self.x, self.y + 3 + EXPANDED_CELL * 2, Direction.SOUTH, self.obstacle_id, 0))
-                # Or (x + 1, y + 4)
-                if is_valid(self.x + 1, self.y + 2 + EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x + 1, self.y + 2 + EXPANDED_CELL *
-                                 2, Direction.SOUTH, self.obstacle_id, SCREENSHOT_COST))
-                # Or (x - 1, y + 4)
-                if is_valid(self.x - 1, self.y + 2 + EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x - 1, self.y + 2 + EXPANDED_CELL *
-                                 2, Direction.SOUTH, self.obstacle_id, SCREENSHOT_COST))
-
-        # If obstacle is facing south, then robot's cell state must be facing north
-        elif self.direction == Direction.SOUTH:
-
-            if retrying == False:
-                # Or (x, y - 3)
-                if is_valid(self.x, self.y - 1 - EXPANDED_CELL * 2):
-                    cells.append(CellState(
-                        self.x, self.y - 1 - EXPANDED_CELL * 2, Direction.NORTH, self.obstacle_id, 10))
-                # Or (x, y - 4)
-                if is_valid(self.x, self.y - 2 - EXPANDED_CELL * 2):
-                    cells.append(CellState(
-                        self.x, self.y - 2 - EXPANDED_CELL * 2, Direction.NORTH, self.obstacle_id, 5))
-                # Or (x, y - 5)
-                if is_valid(self.x, self.y - 3 - EXPANDED_CELL * 2):
-                    cells.append(CellState(
-                        self.x, self.y - 3 - EXPANDED_CELL * 2, Direction.NORTH, self.obstacle_id, 0))
-
-                # Or (x + 1, y - 3)
-                # if is_valid(self.x + 1, self.y - 1 - EXPANDED_CELL * 2):
-                #     cells.append(CellState(self.x + 1, self.y - 1 - EXPANDED_CELL * 2, Direction.NORTH, self.obstacle_id, SCREENSHOT_COST*10))
-                # # Or (x - 1, y - 3)
-                # if is_valid(self.x - 1, self.y - 1 - EXPANDED_CELL * 2):
-                #     cells.append(CellState(self.x - 1, self.y - 1 - EXPANDED_CELL * 2, Direction.NORTH, self.obstacle_id, SCREENSHOT_COST*10))
-
-                # Or (x + 1, y - 4)
-                if is_valid(self.x + 1, self.y - 2 - EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x + 1, self.y - 2 - EXPANDED_CELL *
-                                 2, Direction.NORTH, self.obstacle_id, SCREENSHOT_COST))
-                # Or (x - 1, y - 4)
-                if is_valid(self.x - 1, self.y - 2 - EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x - 1, self.y - 2 - EXPANDED_CELL *
-                                 2, Direction.NORTH, self.obstacle_id, SCREENSHOT_COST))
-
-            elif retrying == True:
-                # Or (x, y - 4)
-                if is_valid(self.x, self.y - 2 - EXPANDED_CELL * 2):
-                    cells.append(CellState(
-                        self.x, self.y - 2 - EXPANDED_CELL * 2, Direction.NORTH, self.obstacle_id, 0))
-                # Or (x, y - 5)
-                if is_valid(self.x, self.y - 3 - EXPANDED_CELL * 2):
-                    cells.append(CellState(
-                        self.x, self.y - 3 - EXPANDED_CELL * 2, Direction.NORTH, self.obstacle_id, 0))
-                # Or (x + 1, y - 4)
-                if is_valid(self.x + 1, self.y - 2 - EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x + 1, self.y - 2 - EXPANDED_CELL *
-                                 2, Direction.NORTH, self.obstacle_id, SCREENSHOT_COST))
-                # Or (x - 1, y - 4)
-                if is_valid(self.x - 1, self.y - 2 - EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x - 1, self.y - 2 - EXPANDED_CELL *
-                                 2, Direction.NORTH, self.obstacle_id, SCREENSHOT_COST))
-
-        # If obstacle is facing east, then robot's cell state must be facing west
-        elif self.direction == Direction.EAST:
-
-            if retrying == False:
-                # Or (x + 3,y)
-                if is_valid(self.x + 1 + EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x + 1 + EXPANDED_CELL * 2,
-                                 self.y, Direction.WEST, self.obstacle_id, 10))
-                # Or (x + 4,y)
-                if is_valid(self.x + 2 + EXPANDED_CELL * 2, self.y):
-                    # print(f"Obstacle facing east, Adding {self.x + 2 + EXPANDED_CELL * 2}, {self.y}")
-                    cells.append(CellState(self.x + 2 + EXPANDED_CELL * 2,
-                                 self.y, Direction.WEST, self.obstacle_id, 5))
-                # Or (x + 5,y)
-                if is_valid(self.x + 3 + EXPANDED_CELL * 2, self.y):
-                    # print(f"Obstacle facing east, Adding {self.x + 2 + EXPANDED_CELL * 2}, {self.y}")
-                    cells.append(CellState(self.x + 3 + EXPANDED_CELL * 2,
-                                 self.y, Direction.WEST, self.obstacle_id, 0))
-
-                # Or (x + 3,y + 1)
-                # if is_valid(self.x + 1 + EXPANDED_CELL * 2, self.y + 1):
-                #     #print(f"Obstacle facing east, Adding {self.x + 2 + EXPANDED_CELL * 2}, {self.y + 1}")
-                #     cells.append(CellState(self.x + 1 + EXPANDED_CELL * 2, self.y + 1, Direction.WEST, self.obstacle_id, SCREENSHOT_COST*10))
-                # # Or (x + 3,y - 1)
-                # if is_valid(self.x + 1 + EXPANDED_CELL * 2, self.y - 1):
-                #     #print(f"Obstacle facing east, Adding {self.x + 2 + EXPANDED_CELL * 2}, {self.y - 1}")
-                #     cells.append(CellState(self.x + 1 + EXPANDED_CELL * 2, self.y - 1, Direction.WEST, self.obstacle_id, SCREENSHOT_COST*10))
-
-                # Or (x + 4, y + 1)
-                if is_valid(self.x + 2 + EXPANDED_CELL * 2, self.y + 1):
-                    cells.append(CellState(self.x + 2 + EXPANDED_CELL * 2, self.y +
-                                 1, Direction.WEST, self.obstacle_id, SCREENSHOT_COST))
-                # Or (x + 4, y - 1)
-                if is_valid(self.x + 2 + EXPANDED_CELL * 2, self.y - 1):
-                    cells.append(CellState(self.x + 2 + EXPANDED_CELL * 2, self.y -
-                                 1, Direction.WEST, self.obstacle_id, SCREENSHOT_COST))
-
-            elif retrying == True:
-                # Or (x + 4, y)
-                if is_valid(self.x + 2 + EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x + 2 + EXPANDED_CELL * 2,
-                                 self.y, Direction.WEST, self.obstacle_id, 0))
-                # Or (x + 5, y)
-                if is_valid(self.x + 3 + EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x + 3 + EXPANDED_CELL * 2,
-                                 self.y, Direction.WEST, self.obstacle_id, 0))
-                # Or (x + 4,y + 1)
-                if is_valid(self.x + 2 + EXPANDED_CELL * 2, self.y + 1):
-                    cells.append(CellState(self.x + 2 + EXPANDED_CELL * 2, self.y +
-                                 1, Direction.WEST, self.obstacle_id, SCREENSHOT_COST))
-                # Or (x + 4,y - 1)
-                if is_valid(self.x + 2 + EXPANDED_CELL * 2, self.y - 1):
-                    cells.append(CellState(self.x + 2 + EXPANDED_CELL * 2, self.y -
-                                 1, Direction.WEST, self.obstacle_id, SCREENSHOT_COST))
-
-        # If obstacle is facing west, then robot's cell state must be facing east
-        elif self.direction == Direction.WEST:
-            # It can be (x - 2,y)
-            # if is_valid(self.x - EXPANDED_CELL * 2, self.y):
-            #     cells.append(CellState(self.x - EXPANDED_CELL * 2, self.y, Direction.EAST, self.obstacle_id, 0))
-
-            if retrying == False:
-                # Or (x - 3, y)
-                if is_valid(self.x - 1 - EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x - 1 - EXPANDED_CELL * 2,
-                                 self.y, Direction.EAST, self.obstacle_id, 10))
-                # Or (x - 4, y)
-                if is_valid(self.x - 2 - EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x - 2 - EXPANDED_CELL * 2,
-                                 self.y, Direction.EAST, self.obstacle_id, 5))
-                # Or (x - 5, y)
-                if is_valid(self.x - 3 - EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x - 3 - EXPANDED_CELL * 2,
-                                 self.y, Direction.EAST, self.obstacle_id, 0))
-
-                # Or (x - 3,y + 1)
-                # if is_valid(self.x - 1 - EXPANDED_CELL * 2, self.y + 1):
-                #     cells.append(CellState(self.x - 1 - EXPANDED_CELL * 2, self.y + 1, Direction.EAST, self.obstacle_id, SCREENSHOT_COST*10))
-                # # Or (x - 3,y - 1)
-                # if is_valid(self.x - 1 - EXPANDED_CELL * 2, self.y - 1):
-                #     cells.append(CellState(self.x - 1 - EXPANDED_CELL * 2, self.y - 1, Direction.EAST, self.obstacle_id, SCREENSHOT_COST*10))
-
-                # Or (x - 4, y + 1)
-                if is_valid(self.x - 2 - EXPANDED_CELL * 2, self.y + 1):
-                    cells.append(CellState(self.x - 2 - EXPANDED_CELL * 2, self.y +
-                                 1, Direction.EAST, self.obstacle_id, SCREENSHOT_COST))
-                # Or (x - 4, y - 1)
-                if is_valid(self.x - 2 - EXPANDED_CELL * 2, self.y - 1):
-                    cells.append(CellState(self.x - 2 - EXPANDED_CELL * 2, self.y -
-                                 1, Direction.EAST, self.obstacle_id, SCREENSHOT_COST))
-
-            elif retrying == True:
-                # Or (x - 4, y)
-                if is_valid(self.x - 2 - EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x - 2 - EXPANDED_CELL * 2,
-                                 self.y, Direction.EAST, self.obstacle_id, 0))
-                # Or (x - 5, y)
-                if is_valid(self.x - 3 - EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x - 3 - EXPANDED_CELL * 2,
-                                 self.y, Direction.EAST, self.obstacle_id, 0))
-                # Or (x - 4, y + 1)
-                if is_valid(self.x - 2 - EXPANDED_CELL * 2, self.y + 1):
-                    cells.append(CellState(self.x - 2 - EXPANDED_CELL * 2, self.y +
-                                 1, Direction.EAST, self.obstacle_id, SCREENSHOT_COST))
-                # Or (x - 4, y - 1)
-                if is_valid(self.x - 2 - EXPANDED_CELL * 2, self.y - 1):
-                    cells.append(CellState(self.x - 2 - EXPANDED_CELL * 2, self.y -
-                                 1, Direction.EAST, self.obstacle_id, SCREENSHOT_COST))
-
-        return cells
+def _build_state(
+    origin: Obstacle,
+    offset_x: int,
+    offset_y: int,
+    facing: Direction,
+    penalty: int,
+) -> CellState:
+    return CellState(origin.x + offset_x, origin.y + offset_y, facing, origin.obstacle_id, penalty)
 
 
 class Grid:
-    """
-    Grid object that contains the size of the grid and a list of obstacles
-    """
+    """Arena abstraction responsible for obstacle bookkeeping and reachability checks."""
+
     def __init__(self, size_x: int, size_y: int):
-        """
-        Args:
-            size_x (int): Size of the grid in the x direction
-            size_y (int): Size of the grid in the y direction
-        """
         self.size_x = size_x
         self.size_y = size_y
-        self.obstacles: List[Obstacle] = []
+        self._obstacles: List[Obstacle] = []
 
-    def add_obstacle(self, obstacle: Obstacle):
-        """Add a new obstacle to the Grid object, ignores if duplicate obstacle
+    @property
+    def obstacles(self) -> List[Obstacle]:
+        return self._obstacles
 
-        Args:
-            obstacle (Obstacle): Obstacle to be added
-        """
-        # Loop through the existing obstacles to check for duplicates
-        to_add = True
-        for ob in self.obstacles:
-            if ob == obstacle:
-                to_add = False
-                break
+    def add_obstacle(self, obstacle: Obstacle) -> None:
+        if not any(existing == obstacle for existing in self._obstacles):
+            self._obstacles.append(obstacle)
 
-        if to_add:
-            self.obstacles.append(obstacle)
+    def reset_obstacles(self) -> None:
+        self._obstacles.clear()
 
-    def reset_obstacles(self):
-        """
-        Resets the obstacles in the grid
-        """
-        self.obstacles = []
+    def get_obstacles(self) -> List[Obstacle]:
+        return self._obstacles
 
-    def get_obstacles(self):
-        """
-        Returns the list of obstacles in the grid
-        """
-        return self.obstacles
-
-    def reachable(self, x: int, y: int, turn=False, preTurn=False) -> bool:
-        """Checks whether the given x,y coordinate is reachable/safe. Criterion is as such:
-        - Must be at least 4 units away in total (x+y) from the obstacle
-        - Greater distance (x or y distance) must be at least 3 units away from obstacle
-
-        Args:
-            x (int): _description_
-            y (int): _description_
-
-        Returns:
-            bool: _description_
-        """
-        
+    def reachable(self, x: int, y: int, turn: bool = False, preTurn: bool = False) -> bool:
         if not self.is_valid_coord(x, y):
             return False
 
-        for ob in self.obstacles:
-            # print(f"Looking at position x:{x} y:{y} against ob: {ob.x} {ob.y}")
-            if ob.x == 4 and ob.y <= 4 and x < 4 and y < 4:
-                # print(f"ob.x: {ob.x} ob.y: {ob.y} x: {x} y:{y} Triggered four bypass")
+        for obstacle in self._obstacles:
+            if _skip_corner_case(obstacle, x, y):
                 continue
 
-            # if x <= 3 and y <= 4:
-            #     continue
-
-            # Must be at least 4 units away in total (x+y)
-            if abs(ob.x - x) + abs(ob.y - y) >= 4:
-                # print(f"ob.x: {ob.x} ob.y: {ob.y} x: {x} y:{y} Triggered more than 3 units bypass")
+            taxicab, max_gap = _distance_metrics(obstacle, x, y)
+            if taxicab >= 4:
                 continue
-            # If max(x,y) is less than 3 units away, consider not reachable
-            # if max(abs(ob.x - x), abs(ob.y - y)) < EXPANDED_CELL * 2 + 1:
-            if turn:
-                if max(abs(ob.x - x), abs(ob.y - y)) < EXPANDED_CELL * 2 + 1:
-                    # if ob.x == 0 and ob.y == 10 and x == 1 and y == 12:
-                    #     print(f"ob.x: {ob.x} ob.y: {ob.y} x: {x} y:{y} Triggered less than 3 max units trap")
-                    return False
-            if preTurn:
-                if max(abs(ob.x - x), abs(ob.y - y)) < EXPANDED_CELL * 2 + 1:
-                    # if ob.x == 0 and ob.y == 10 and x == 1 and y == 12:
-                    #     print(f"ob.x: {ob.x} ob.y: {ob.y} x: {x} y:{y} Triggered less than 3 max units trap")
-                    return False
-            else:
-                if max(abs(ob.x - x), abs(ob.y - y)) < 2:
-                    # print(f"ob.x: {ob.x} ob.y: {ob.y} x: {x} y:{y} Triggered less than 3 max units trap")
-                    return False
+
+            if _violates_padding(max_gap, turn, preTurn):
+                return False
 
         return True
 
     def is_valid_coord(self, x: int, y: int) -> bool:
-        """Checks if given position is within bounds
-
-        Args:
-            x (int): x-coordinate
-            y (int): y-coordinate
-
-        Returns:
-            bool: True if valid, False otherwise
-        """
-        if x < 1 or x >= self.size_x - 1 or y < 1 or y >= self.size_y - 1:
-            return False
-
-        return True
+        return 1 <= x < self.size_x - 1 and 1 <= y < self.size_y - 1
 
     def is_valid_cell_state(self, state: CellState) -> bool:
-        """Checks if given state is within bounds
-
-        Args:
-            state (CellState)
-
-        Returns:
-            bool: True if valid, False otherwise
-        """
         return self.is_valid_coord(state.x, state.y)
 
     def get_view_obstacle_positions(self, retrying) -> List[List[CellState]]:
-        """
-        This function return a list of desired states for the robot to achieve based on the obstacle position and direction.
-        The state is the position that the robot can see the image of the obstacle and is safe to reach without collision
-        :return: [[CellState]]
-        """
-        # print(f"Inside get_view_obstacle_positions: retrying = {retrying}")
-        optimal_positions = []
-        for obstacle in self.obstacles:
-            if obstacle.direction == 8:
+        positions: List[List[CellState]] = []
+        for obstacle in self._obstacles:
+            if obstacle.direction == Direction.SKIP:
                 continue
-            else:
-                view_states = [view_state for view_state in obstacle.get_view_state(
-                    retrying) if self.reachable(view_state.x, view_state.y)]
-            optimal_positions.append(view_states)
+            states = [candidate for candidate in obstacle.get_view_state(retrying) if self.reachable(candidate.x, candidate.y)]
+            positions.append(states)
+        return positions
 
-        return optimal_positions
+
+def _skip_corner_case(obstacle: Obstacle, target_x: int, target_y: int) -> bool:
+    return obstacle.x == 4 and obstacle.y <= 4 and target_x < 4 and target_y < 4
+
+
+def _distance_metrics(obstacle: Obstacle, x: int, y: int) -> Tuple[int, int]:
+    delta_x = abs(obstacle.x - x)
+    delta_y = abs(obstacle.y - y)
+    return delta_x + delta_y, max(delta_x, delta_y)
+
+
+def _violates_padding(max_gap: int, turn: bool, preTurn: bool) -> bool:
+    padded_gap = SAFETY_RING + 1
+    if turn and max_gap < padded_gap:
+        return True
+    if preTurn and max_gap < padded_gap:
+        return True
+    if not preTurn and max_gap < 2:
+        return True
+    return False

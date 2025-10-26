@@ -1,445 +1,411 @@
+from __future__ import annotations
+
 import heapq
 import math
-from typing import List
+from dataclasses import dataclass
+from itertools import product
+from typing import Dict, Iterable, Iterator, List, Sequence, Tuple
+
 import numpy as np
+
+from consts import Direction, ITERATIONS, MOVE_DIRECTION, SAFE_COST, TURN_FACTOR, TURN_RADIUS
+from entities.Entity import CellState, Grid, Obstacle
 from entities.Robot import Robot
-from entities.Entity import Obstacle, CellState, Grid
-from consts import Direction, MOVE_DIRECTION, TURN_FACTOR, ITERATIONS, TURN_RADIUS, SAFE_COST
 from python_tsp.exact import solve_tsp_dynamic_programming
 
-TURN_OFFSET_TABLES = {
 
-    # Change offset values accordingly (rounded to nearest 10)
-    "forward_right": [
-        # (1 * TURN_RADIUS, 1 * TURN_RADIUS),
+HEADING_VECTORS: Dict[Direction, Tuple[int, int]] = {
+    direction: vector
+    for direction, vector in (
+        (Direction.NORTH, (0, 1)),
+        (Direction.EAST, (1, 0)),
+        (Direction.SOUTH, (0, -1)),
+        (Direction.WEST, (-1, 0)),
+    )
+}
+
+
+TURN_KINEMATICS: Dict[Tuple[str, str], Tuple[Tuple[float, float], Tuple[float, float]]] = {
+    ("forward", "right"): (
+        (4 * TURN_RADIUS, 2.5 * TURN_RADIUS),
+        (4 * TURN_RADIUS, 2.5 * TURN_RADIUS),
+    ),
+    ("forward", "left"): (
+        (3 * TURN_RADIUS, 1.5 * TURN_RADIUS),
         (4 * TURN_RADIUS, 2 * TURN_RADIUS),
-    ],
-    "forward_left": [
-        # (1 * TURN_RADIUS, 0 * TURN_RADIUS),
-        (-3 * TURN_RADIUS, 1 * TURN_RADIUS),
-    ],
+    ),
+    ("backward", "right"): (
+        (2 * TURN_RADIUS, 3 * TURN_RADIUS),
+        (2 * TURN_RADIUS, 4 * TURN_RADIUS),
+    ),
+    ("backward", "left"): (
+        (3 * TURN_RADIUS, 2 * TURN_RADIUS),
+        (4 * TURN_RADIUS, 2 * TURN_RADIUS),
+    ),
 }
 
-FORWARD_VECTORS = {
-    Direction.NORTH: (1, 0),   # +x
-    Direction.EAST: (0, -1),   # -y
-    Direction.SOUTH: (-1, 0),  # -x
-    Direction.WEST: (0, 1),    # +y
-}
 
-RIGHT_VECTORS = {
-    Direction.NORTH: (0, 1),   # +y
-    Direction.EAST: (1, 0),    # +x
-    Direction.SOUTH: (0, -1),  # -y
-    Direction.WEST: (-1, 0),   # -x
-}
+@dataclass
+class CandidateMatrix:
+    states: List[CellState]
+    groups: List[Sequence[CellState]]
+    offsets: List[int]
+
+
+@dataclass
+class RouteCache:
+    costs: Dict[Tuple[CellState, CellState], float]
+    paths: Dict[Tuple[CellState, CellState], List[Tuple[int, int, Direction]]]
+
+    def __init__(self) -> None:
+        self.costs = {}
+        self.paths = {}
+
+
+def _pairwise(sequence: Sequence[int]) -> Iterator[Tuple[int, int]]:
+    iterator = iter(sequence)
+    try:
+        previous = next(iterator)
+    except StopIteration:
+        return
+
+    for current in iterator:
+        yield previous, current
+        previous = current
+
 
 class MazeSolver:
+    """Generates robot paths while keeping the original external behaviour intact."""
+
     def __init__(
-            self,
-            size_x: int,
-            size_y: int,
-            robot_x: int,
-            robot_y: int,
-            robot_direction: Direction,
-            big_turn=0 # the big_turn here is to allow 3-1 turn(0 - by default) | 4-2 turn(1)
+        self,
+        size_x: int,
+        size_y: int,
+        robot_x: int,
+        robot_y: int,
+        robot_direction: Direction,
+        big_turn=None,
     ):
-        # Initialize a Grid object for the arena representation
-        self.grid = Grid(size_x, size_y)
-        # Initialize a Robot object for robot representation
-        self.robot = Robot(robot_x, robot_y, robot_direction)
-        # Create tables for paths and costs
-        self.path_table = dict()
-        self.cost_table = dict()
-        self.big_turn = 0
-        self.turn_offsets = {
-            key: TURN_OFFSET_TABLES[key][self.big_turn] for key in TURN_OFFSET_TABLES
-        }
+        self._grid = Grid(size_x, size_y)
+        self._robot = Robot(robot_x, robot_y, robot_direction)
+        self._cache = RouteCache()
+        self._turn_profile = int(big_turn or 0)
 
-    def add_obstacle(self, x: int, y: int, direction: Direction, obstacle_id: int):
-        """Add obstacle to MazeSolver object
+        # Preserve backwards compatibility with legacy callers.
+        self.path_table = self._cache.paths
+        self.cost_table = self._cache.costs
 
-        Args:
-            x (int): x coordinate of obstacle
-            y (int): y coordinate of obstacle
-            direction (Direction): Direction of obstacle
-            obstacle_id (int): ID of obstacle
-        """
-        # Create an obstacle object
-        obstacle = Obstacle(x, y, direction, obstacle_id)
-        # Add created obstacle to grid object
-        self.grid.add_obstacle(obstacle)
+    @property
+    def grid(self) -> Grid:
+        return self._grid
 
-    def reset_obstacles(self):
-        self.grid.reset_obstacles()
+    @property
+    def robot(self) -> Robot:
+        return self._robot
+
+    @property
+    def big_turn(self) -> int:
+        return self._turn_profile
+
+    def add_obstacle(self, x: int, y: int, direction: Direction, obstacle_id: int) -> None:
+        self._grid.add_obstacle(Obstacle(x, y, direction, obstacle_id))
+
+    def reset_obstacles(self) -> None:
+        self._grid.reset_obstacles()
 
     @staticmethod
-    def compute_coord_distance(x1: int, y1: int, x2: int, y2: int, level=1):
-        """Compute the L-n distance between two coordinates
-
-        Args:
-            x1 (int)
-            y1 (int)
-            x2 (int)
-            y2 (int)
-            level (int, optional): L-n distance to compute. Defaults to 1.
-
-        Returns:
-            float: L-n distance between the two given points
-        """
-        horizontal_distance = x1 - x2
-        vertical_distance = y1 - y2
-
-        # Euclidean distance
+    def compute_coord_distance(x1: int, y1: int, x2: int, y2: int, level: int = 1) -> float:
+        delta_x, delta_y = x1 - x2, y1 - y2
         if level == 2:
-            return math.sqrt(horizontal_distance ** 2 + vertical_distance ** 2)
-
-        return abs(horizontal_distance) + abs(vertical_distance)
+            return math.hypot(delta_x, delta_y)
+        return abs(delta_x) + abs(delta_y)
 
     @staticmethod
-    def compute_state_distance(start_state: CellState, end_state: CellState, level=1):
-        """Compute the L-n distance between two cell states
-
-        Args:
-            start_state (CellState): Start cell state
-            end_state (CellState): End cell state
-            level (int, optional): L-n distance to compute. Defaults to 1.
-
-        Returns:
-            float: L-n distance between the two given cell states
-        """
+    def compute_state_distance(start_state: CellState, end_state: CellState, level: int = 1) -> float:
         return MazeSolver.compute_coord_distance(start_state.x, start_state.y, end_state.x, end_state.y, level)
 
     @staticmethod
-    def get_visit_options(n):
-        """Generate all possible n-digit binary strings
+    def get_visit_options(count: int) -> List[str]:
+        if count == 0:
+            return ["0"]
 
-        Args:
-            n (int): number of digits in binary string to generate
+        masks = [format(idx, f"0{count}b") for idx in range(2**count)]
+        masks.sort(key=lambda bitmask: bitmask.count("1"), reverse=True)
+        return masks
 
-        Returns:
-            List: list of all possible n-digit binary strings
-        """
-        s = []
-        l = bin(2 ** n - 1).count('1')
+    def get_optimal_order_dp(self, retrying) -> Tuple[List[CellState], float]:
+        vantage_catalog = self._grid.get_view_obstacle_positions(retrying)
+        if not vantage_catalog:
+            return [self._robot.get_start_state()], 0.0
 
-        for i in range(2 ** n):
-            s.append(bin(i)[2:].zfill(l))
+        for visit_mask in self.get_visit_options(len(vantage_catalog)):
+            bundle = self._build_candidate_matrix(vantage_catalog, visit_mask)
+            if bundle is None:
+                continue
 
-        s.sort(key=lambda x: x.count('1'), reverse=True)
-        return s
+            if not bundle.groups:
+                return [bundle.states[0]], 0.0
 
-    def get_optimal_order_dp(self, retrying) -> List[CellState]:
-        distance = 1e9
-        optimal_path = []
+            if any(len(group) == 0 for group in bundle.groups):
+                continue
 
-        #print(f"Inside get_optimal_order_dp: retrying = {retrying}")
-        # Get all possible positions that can view the obstacles
-        all_view_positions = self.grid.get_view_obstacle_positions(retrying)
-        #print(f"all_view_positions: {all_view_positions}")
-        #print(f"All view position: {all_view_positions}")
+            self.path_cost_generator(bundle.states)
 
-        for op in self.get_visit_options(len(all_view_positions)):
-            # op is binary string of length len(all_view_positions) == len(obstacles)
-            # If index == 1 means the view_positions[index] is selected to visit, otherwise drop
+            best_path_for_mask: List[CellState] | None = None
+            best_cost_for_mask = float("inf")
 
-            # Calculate optimal_cost table
+            for selection, penalty in self._selection_generator(bundle.groups):
+                route_indices = self._translate_indices(selection, bundle.offsets)
+                permutation, travel_cost = self._solve_route(bundle.states, route_indices)
+                total_cost = travel_cost + penalty
 
-            # Initialize `items` to be a list containing the robot's start state as the first item
-            items = [self.robot.get_start_state()]
-            # Initialize `cur_view_positions` to be an empty list
-            cur_view_positions = []
-            
-            # print(f"===================\nop = {op}")
-            # print("List of obstacle visited: \n")
-
-            # For each obstacle
-            for idx in range(len(all_view_positions)):
-                # If robot is visiting
-                if op[idx] == '1':
-                    # Add possible cells to `items`
-                    items = items + all_view_positions[idx]
-                    # Add possible cells to `cur_view_positions`
-                    cur_view_positions.append(all_view_positions[idx])
-                    #print("obstacle: {}\n".format(self.grid.obstacles[idx]))
-
-            # Generate the path cost for the items
-            self.path_cost_generator(items)
-            combination = []
-            self.generate_combination(cur_view_positions, 0, [], combination, [ITERATIONS])
-
-            for c in combination: # run the algo some times ->
-                visited_candidates = [0] # add the start state of the robot
-
-                cur_index = 1
-                fixed_cost = 0 # the cost applying for the position taking obstacle pictures
-                for index, view_position in enumerate(cur_view_positions):
-                    visited_candidates.append(cur_index + c[index])
-                    fixed_cost += view_position[c[index]].penalty
-                    cur_index += len(view_position)
-                
-                cost_np = np.zeros((len(visited_candidates), len(visited_candidates)))
-
-                for s in range(len(visited_candidates) - 1):
-                    for e in range(s + 1, len(visited_candidates)):
-                        u = items[visited_candidates[s]]
-                        v = items[visited_candidates[e]]
-                        if (u, v) in self.cost_table.keys():
-                            cost_np[s][e] = self.cost_table[(u, v)]
-                        else:
-                            cost_np[s][e] = 1e9
-                        cost_np[e][s] = cost_np[s][e]
-                cost_np[:, 0] = 0
-                _permutation, _distance = solve_tsp_dynamic_programming(cost_np)
-                # print(f"fixed_cost = {fixed_cost}")
-                # print(f"distance = {_distance}")
-                if _distance + fixed_cost >= distance:
+                if total_cost >= best_cost_for_mask:
                     continue
 
-                optimal_path = [items[0]]
-                distance = _distance + fixed_cost
+                candidate_path = self._materialize_path(bundle.states, route_indices, permutation)
+                if not candidate_path:
+                    continue
 
-                for i in range(len(_permutation) - 1):
-                    from_item = items[visited_candidates[_permutation[i]]]
-                    to_item = items[visited_candidates[_permutation[i + 1]]]
+                best_cost_for_mask = total_cost
+                best_path_for_mask = candidate_path
 
-                    cur_path = self.path_table[(from_item, to_item)]
-                    for j in range(1, len(cur_path)):
-                        optimal_path.append(CellState(cur_path[j][0], cur_path[j][1], cur_path[j][2]))
+            if best_path_for_mask is not None:
+                return best_path_for_mask, best_cost_for_mask
 
-                    optimal_path[-1].set_screenshot(to_item.screenshot_id)
-
-            if optimal_path:
-                # if found optimal path, return
-                break
-
-        return optimal_path, distance
-
-    @staticmethod
-    def generate_combination(view_positions, index, current, result, iteration_left):
-        if index == len(view_positions):
-            result.append(current[:])
-            return
-
-        if iteration_left[0] == 0:
-            return
-
-        iteration_left[0] -= 1
-        for j in range(len(view_positions[index])):
-            current.append(j)
-            MazeSolver.generate_combination(view_positions, index + 1, current, result, iteration_left)
-            current.pop()
-
-    def get_safe_cost(self, x, y):
-        """Get the safe cost of a particular x,y coordinate wrt obstacles that are exactly 2 units away from it in both x and y directions
-
-        Args:
-            x (int): x-coordinate
-            y (int): y-coordinate
-
-        Returns:
-            int: safe cost
-        """
-        for ob in self.grid.obstacles:
-            if abs(ob.x-x) == 2 and abs(ob.y-y) == 2:
-                return SAFE_COST
-            
-            if abs(ob.x-x) == 1 and abs(ob.y-y) == 2:
-                return SAFE_COST
-            
-            if abs(ob.x-x) == 2 and abs(ob.y-y) == 1:
-                return SAFE_COST
-
-        return 0
-
-    def get_safe_turn_cost(self, x, y):
-        """Get the safe cost of a particular x,y coordinate wrt obstacles that are exactly 2 units away from it in both x and y directions
-
-        Args:
-            x (int): x-coordinate
-            y (int): y-coordinate
-
-        Returns:
-            int: safe cost
-        """
-        for ob in self.grid.obstacles:
-            if abs(ob.x-x) <= 3 and abs(ob.y-y) <= 3:
-                return SAFE_COST
-        return 0
-
-    def get_neighbors(self, x, y, direction):  # TODO: see the behavior of the robot and adjust...
-        """
-        Return a list of tuples with format:
-        newX, newY, new_direction
-        """
-        # Neighbors have the following format: {newX, newY, movement direction, safe cost}
-        # Neighbors are coordinates that fulfill the following criteria:
-        # If moving in the same direction:
-        #   - Valid position within bounds
-        #   - Must be at least 4 units away in total (x+y) 
-        #   - Furthest distance must be at least 3 units away (x or y)
-        # If it is exactly 2 units away in both x and y directions, safe cost = SAFECOST. Else, safe cost = 0
-
-        neighbors = []
-        # Assume that after following this direction, the car direction is EXACTLY md
-        for dx, dy, md in MOVE_DIRECTION:
-            if md == direction:  # if the new direction == md
-                # Check for valid position
-                if self.grid.reachable(x + dx, y + dy):  # go forward;
-                    # Get safe cost of destination
-                    safe_cost = self.get_safe_cost(x + dx, y + dy)
-                    neighbors.append((x + dx, y + dy, md, safe_cost))
-                # Check for valid position
-
-                # Removing backwards movement
-                
-                if self.grid.reachable(x - dx, y - dy):  # go back;
-                    # Get safe cost of destination
-                    safe_cost = self.get_safe_cost(x - dx, y - dy)
-                    neighbors.append((x - dx, y - dy, md, safe_cost))
-                
-
-            else:  # consider 8 cases
-                new_x = 0
-                new_y = 0
-                # north <-> east
-                if direction == Direction.NORTH and md == Direction.EAST:
-                    x_change, y_change = self.turn_offsets["forward_right"]
-                    new_x = x + x_change
-                    new_y = y + y_change
-
-                
-                if direction == Direction.EAST and md == Direction.NORTH:
-                    x_change, y_change = self.turn_offsets["forward_left"]
-                    new_x = x + y_change
-                    new_y = y - x_change
-                
-
-                # east <-> south
-                if direction == Direction.EAST and md == Direction.SOUTH:
-                    x_change, y_change = self.turn_offsets["forward_right"]
-                    new_x = x + y_change
-                    new_y = y - x_change
-
-                
-                if direction == Direction.SOUTH and md == Direction.EAST:
-                    x_change, y_change = self.turn_offsets["forward_left"]
-                    new_x = x - x_change
-                    new_y = y - y_change
-                
-
-                # south <-> west
-                if direction == Direction.SOUTH and md == Direction.WEST:
-                    x_change, y_change = self.turn_offsets["forward_right"]
-                    new_x = x - x_change
-                    new_y = y - y_change
-
-                
-                if direction == Direction.WEST and md == Direction.SOUTH:
-                    x_change, y_change = self.turn_offsets["forward_left"]
-                    new_x = x - y_change
-                    new_y = y + x_change
-                
-
-                # west <-> north
-                if direction == Direction.WEST and md == Direction.NORTH:
-                    x_change, y_change = self.turn_offsets["forward_right"]
-                    new_x = x - y_change
-                    new_y = y + x_change
-                
-                if direction == Direction.NORTH and md == Direction.WEST:
-                    x_change, y_change = self.turn_offsets["forward_left"]
-                    new_x = x + x_change
-                    new_y = y + y_change
-                
-                # Check for valid position
-                if self.grid.reachable(new_x, new_y, turn = True) and self.grid.reachable(x, y, preTurn = True):
-                    safe_cost = self.get_safe_turn_cost(x, y)
-                    neighbors.append((new_x, new_y, md, safe_cost))
-        return neighbors
+        return [], float("inf")
 
     def path_cost_generator(self, states: List[CellState]):
-        """Generate the path cost between the input states and update the tables accordingly
+        for start_idx in range(len(states) - 1):
+            for end_idx in range(start_idx + 1, len(states)):
+                self._run_astar(states[start_idx], states[end_idx])
 
-        Args:
-            states (List[CellState]): cell states to visit
-        """
-        def record_path(start, end, parent: dict, cost: int):
+    @staticmethod
+    def generate_combination(view_positions, _index, _current, result, iteration_left):
+        limit = iteration_left[0]
+        generated = []
+        for selection, _ in MazeSolver._selection_generator(view_positions, limit=limit):
+            generated.append(selection)
 
-            # Update cost table for the (start,end) and (end,start) edges
-            self.cost_table[(start, end)] = cost
-            self.cost_table[(end, start)] = cost
+        result.extend(generated)
+        iteration_left[0] = max(iteration_left[0] - len(generated), 0)
 
-            path = []
-            cursor = (end.x, end.y, end.direction)
+    def _build_candidate_matrix(
+        self,
+        vantage_catalog: Sequence[Sequence[CellState]],
+        mask: str,
+    ) -> CandidateMatrix | None:
+        states = [self._robot.get_start_state()]
+        groups: List[Sequence[CellState]] = []
+        offsets: List[int] = []
+        cursor = 1
 
-            while cursor in parent:
-                path.append(cursor)
-                cursor = parent[cursor]
+        for include_flag, viewpoints in zip(mask, vantage_catalog):
+            if include_flag == "1":
+                groups.append(viewpoints)
+                offsets.append(cursor)
+                states.extend(viewpoints)
+                cursor += len(viewpoints)
 
-            path.append(cursor)
+        return CandidateMatrix(states, groups, offsets)
 
-            # Update path table for the (start,end) and (end,start) edges, with the (start,end) edge being the reversed path
-            self.path_table[(start, end)] = path[::-1]
-            self.path_table[(end, start)] = path
+    def _translate_indices(self, selection: Sequence[int], offsets: Sequence[int]) -> List[int]:
+        indices = [0]
+        for base_index, chosen in zip(offsets, selection):
+            indices.append(base_index + chosen)
+        return indices
 
-        def astar_search(start: CellState, end: CellState):
-            # astar search algo with three states: x, y, direction
+    def _solve_route(self, states: Sequence[CellState], indices: Sequence[int]):
+        size = len(indices)
+        if size <= 1:
+            return [0], 0.0
 
-            # If it is already done before, return
-            if (start, end) in self.path_table:
+        matrix = np.full((size, size), 1e9, dtype=float)
+        np.fill_diagonal(matrix, 0)
+
+        for i in range(size - 1):
+            for j in range(i + 1, size):
+                start_state = states[indices[i]]
+                end_state = states[indices[j]]
+                cost = self._cache.costs.get((start_state, end_state))
+                if cost is not None:
+                    matrix[i, j] = cost
+                    matrix[j, i] = cost
+
+        matrix[:, 0] = 0
+        return solve_tsp_dynamic_programming(matrix)
+
+    def _materialize_path(
+        self,
+        states: Sequence[CellState],
+        indices: Sequence[int],
+        permutation: Sequence[int],
+    ) -> List[CellState] | None:
+        if not permutation:
+            return None
+
+        ordered_indices = [indices[idx] for idx in permutation]
+        route: List[CellState] = [states[ordered_indices[0]]]
+
+        for start_idx, end_idx in _pairwise(ordered_indices):
+            start_state = states[start_idx]
+            end_state = states[end_idx]
+            segment = self._cache.paths.get((start_state, end_state))
+            if not segment:
+                return None
+
+            for x_coord, y_coord, heading in segment[1:]:
+                route.append(CellState(x_coord, y_coord, heading))
+            route[-1].set_screenshot(end_state.screenshot_id)
+
+        return route
+
+    @staticmethod
+    def _selection_generator(
+        groups: Sequence[Sequence[CellState]],
+        limit: int = ITERATIONS,
+    ) -> Iterator[Tuple[List[int], int]]:
+        if not groups:
+            yield [], 0
+            return
+
+        for selection in product(*(range(len(group)) for group in groups)):
+            if limit <= 0:
+                break
+            penalty = sum(group[idx].penalty for group, idx in zip(groups, selection))
+            yield list(selection), penalty
+            limit -= 1
+
+    def _run_astar(self, start: CellState, goal: CellState) -> None:
+        if (start, goal) in self._cache.paths:
+            return
+
+        frontier: List[Tuple[float, int, int, Direction]] = [
+            (self.compute_state_distance(start, goal), start.x, start.y, start.direction)
+        ]
+        best_cost = {(start.x, start.y, start.direction): 0.0}
+        parents: Dict[Tuple[int, int, Direction], Tuple[int, int, Direction]] = {}
+        visited: set[Tuple[int, int, Direction]] = set()
+
+        while frontier:
+            _, cur_x, cur_y, heading = heapq.heappop(frontier)
+            signature = (cur_x, cur_y, heading)
+
+            if signature in visited:
+                continue
+
+            if goal.is_eq(cur_x, cur_y, heading):
+                self._record_route(start, goal, parents, best_cost[signature])
                 return
 
-            # Heuristic to guide the search: 'distance' is calculated by f = g + h
-            # g is the actual distance moved so far from the start node to current node
-            # h is the heuristic distance from current node to end node
-            g_distance = {(start.x, start.y, start.direction): 0}
+            visited.add(signature)
+            base_cost = best_cost[signature]
 
-            # format of each item in heap: (f_distance of node, x coord of node, y coord of node)
-            # heap in Python is a min-heap
-            heap = [(self.compute_state_distance(start, end), start.x, start.y, start.direction)]
-            parent = dict()
-            visited = set()
-
-            while heap:
-                # Pop the node with the smallest distance
-                _, cur_x, cur_y, cur_direction = heapq.heappop(heap)
-                
-                if (cur_x, cur_y, cur_direction) in visited:
+            for next_x, next_y, next_heading, safety in self._neighbors(cur_x, cur_y, heading):
+                neighbour_signature = (next_x, next_y, next_heading)
+                if neighbour_signature in visited:
                     continue
 
-                if end.is_eq(cur_x, cur_y, cur_direction):
-                    record_path(start, end, parent, g_distance[(cur_x, cur_y, cur_direction)])
-                    return
+                move_cost = (
+                    Direction.rotation_cost(next_heading, heading) * TURN_FACTOR
+                    + 1
+                    + safety
+                )
+                tentative = base_cost + move_cost
+                heuristic = self.compute_coord_distance(next_x, next_y, goal.x, goal.y)
+                score = tentative + heuristic
 
-                visited.add((cur_x, cur_y, cur_direction))
-                cur_distance = g_distance[(cur_x, cur_y, cur_direction)]
+                if neighbour_signature not in best_cost or tentative < best_cost[neighbour_signature]:
+                    best_cost[neighbour_signature] = tentative
+                    parents[neighbour_signature] = signature
+                    heapq.heappush(frontier, (score, next_x, next_y, next_heading))
 
-                for next_x, next_y, new_direction, safe_cost in self.get_neighbors(cur_x, cur_y, cur_direction):
-                    if (next_x, next_y, new_direction) in visited:
-                        continue
+    def _record_route(
+        self,
+        start: CellState,
+        goal: CellState,
+        parents: Dict[Tuple[int, int, Direction], Tuple[int, int, Direction]],
+        cost: float,
+    ) -> None:
+        self._cache.costs[(start, goal)] = cost
+        self._cache.costs[(goal, start)] = cost
 
-                    move_cost = Direction.rotation_cost(new_direction, cur_direction) * TURN_FACTOR + 1 + safe_cost
+        path: List[Tuple[int, int, Direction]] = []
+        cursor = (goal.x, goal.y, goal.direction)
 
-                    # the cost to check if any obstacles that considered too near the robot; if it
-                    # safe_cost =
+        while cursor in parents:
+            path.append(cursor)
+            cursor = parents[cursor]
 
-                    # new cost is calculated by the cost to reach current state + cost to move from
-                    # current state to new state + heuristic cost from new state to end state
-                    next_cost = cur_distance + move_cost + \
-                                self.compute_coord_distance(next_x, next_y, end.x, end.y)
+        path.append(cursor)
 
-                    if (next_x, next_y, new_direction) not in g_distance or \
-                            g_distance[(next_x, next_y, new_direction)] > cur_distance + move_cost:
-                        g_distance[(next_x, next_y, new_direction)] = cur_distance + move_cost
-                        parent[(next_x, next_y, new_direction)] = (cur_x, cur_y, cur_direction)
+        forward_path = list(reversed(path))
+        reverse_path = list(path)
 
-                        heapq.heappush(heap, (next_cost, next_x, next_y, new_direction))
+        self._cache.paths[(start, goal)] = forward_path
+        self._cache.paths[(goal, start)] = reverse_path
 
-        # Nested loop through all the state pairings
-        for i in range(len(states) - 1):
-            for j in range(i + 1, len(states)):
-                astar_search(states[i], states[j])
+    def _neighbors(self, x: int, y: int, heading: Direction) -> Iterable[Tuple[float, float, Direction, int]]:
+        yield from self._linear_moves(x, y, heading)
+        yield from self._turn_moves(x, y, heading)
+
+    def get_neighbors(self, x: int, y: int, direction: Direction):
+        return list(self._neighbors(x, y, direction))
+
+    def _linear_moves(self, x: int, y: int, heading: Direction) -> Iterable[Tuple[float, float, Direction, int]]:
+        for step_x, step_y, direction in MOVE_DIRECTION:
+            if direction != heading:
+                continue
+            for multiplier in (1, -1):
+                candidate_x = x + step_x * multiplier
+                candidate_y = y + step_y * multiplier
+                if self._grid.reachable(candidate_x, candidate_y):
+                    yield candidate_x, candidate_y, heading, self._safety_penalty(candidate_x, candidate_y)
+
+    def _turn_moves(self, x: int, y: int, heading: Direction) -> Iterable[Tuple[float, float, Direction, int]]:
+        right_heading = self._rotate(heading, 2)
+        left_heading = self._rotate(heading, -2)
+
+        for target_heading, side in ((right_heading, "right"), (left_heading, "left")):
+            for motion in ("forward", "backward"):
+                delta_x, delta_y = self._turn_delta(motion, side, heading, target_heading)
+                target_x = x + delta_x
+                target_y = y + delta_y
+
+                if self._grid.reachable(target_x, target_y, turn=True) and self._grid.reachable(x, y, preTurn=True):
+                    penalty = self._safety_penalty(target_x, target_y) + 10
+                    yield target_x, target_y, target_heading, penalty
+
+    def _turn_delta(
+        self,
+        motion: str,
+        side: str,
+        start_heading: Direction,
+        target_heading: Direction,
+    ) -> Tuple[float, float]:
+        offsets = TURN_KINEMATICS[(motion, side)][self._turn_profile]
+        next_vector = HEADING_VECTORS[target_heading]
+        current_vector = HEADING_VECTORS[start_heading]
+        sign = 1 if motion == "forward" else -1
+
+        offset_new, offset_old = offsets
+        delta_x = sign * (offset_new * next_vector[0] + offset_old * current_vector[0])
+        delta_y = sign * (offset_new * next_vector[1] + offset_old * current_vector[1])
+        return delta_x, delta_y
+
+    def _safety_penalty(self, x: float, y: float) -> int:
+        for obstacle in self._grid.obstacles:
+            if abs(obstacle.x - x) == 2 and abs(obstacle.y - y) == 2:
+                return SAFE_COST
+            if abs(obstacle.x - x) == 1 and abs(obstacle.y - y) == 2:
+                return SAFE_COST
+            if abs(obstacle.x - x) == 2 and abs(obstacle.y - y) == 1:
+                return SAFE_COST
+        return 0
+
+    @staticmethod
+    def _rotate(base: Direction, delta: int) -> Direction:
+        return Direction((int(base) + delta) % 8)
+
 
 if __name__ == "__main__":
     pass
