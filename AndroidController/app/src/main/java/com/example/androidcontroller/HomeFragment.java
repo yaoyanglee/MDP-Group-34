@@ -8,6 +8,7 @@ import android.os.Bundle;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.widget.SwitchCompat;
 import androidx.fragment.app.Fragment;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
@@ -22,10 +23,12 @@ import android.widget.Button;
 import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.ListAdapter;
 import android.widget.ListView;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.content.SharedPreferences;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -33,6 +36,7 @@ import org.json.JSONObject;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -45,6 +49,9 @@ public class HomeFragment extends Fragment{
     private Switch manualModeSwitch;
     private Switch outdoorArenaSwitch;
     private Switch turningModeSwitch;
+    private SwitchCompat themeSwitch;
+
+    private SharedPreferences sharedPreferences;
 
     private View rootview;
 
@@ -54,7 +61,7 @@ public class HomeFragment extends Fragment{
     private Handler handler = new Handler();
 
     //GridMap
-    private static GridMap gridMap;
+    private GridMap gridMap;
 
     //For robot
     private boolean isManual = false;
@@ -62,6 +69,7 @@ public class HomeFragment extends Fragment{
     //For Obstalce listview
     private ObstaclesListViewAdapter obstaclesListViewAdapter;
     private List<ObstacleListItem> obstacleListItemList;
+    private ListView obstacleListView;
 
     //Auxiliary
     private long timeStarted;
@@ -101,6 +109,12 @@ public class HomeFragment extends Fragment{
         // Required empty public constructor
     }
 
+    @Override
+    public void onAttach(@NonNull Context context) {
+        super.onAttach(context);
+        sharedPreferences = context.getSharedPreferences(RobotControllerActions.PREFS_NAME, Context.MODE_PRIVATE);
+    }
+
     /**
      * Use this factory method to create a new instance of
      * this fragment using the provided parameters.
@@ -137,6 +151,7 @@ public class HomeFragment extends Fragment{
             LocalBroadcastManager.getInstance(getContext()).registerReceiver(updateObstalceListReceiver, new IntentFilter("newObstacleList"));
             LocalBroadcastManager.getInstance(getContext()).registerReceiver(imageRecResultReceiver, new IntentFilter("imageResult"));
             LocalBroadcastManager.getInstance(getContext()).registerReceiver(robotLocationUpdateReceiver, new IntentFilter("updateRobocarLocation"));
+            LocalBroadcastManager.getInstance(getContext()).registerReceiver(startFastestCarReceiver, new IntentFilter(RobotControllerActions.ACTION_START_FASTEST_CAR));
 
             initializedIntentListeners = true;
         }
@@ -148,20 +163,44 @@ public class HomeFragment extends Fragment{
 
         rootview = inflater.inflate(R.layout.fragment_home, container, false);
 
-        if(gridMap == null){
-            gridMap = new GridMap(getContext());
-            gridMap = rootview.findViewById(R.id.mapView);
+        gridMap = rootview.findViewById(R.id.mapView);
+        if (gridMap == null) {
+            throw new IllegalStateException("Map view not found in layout");
         }
 
         //For obstacle list view
-        ListView obstacleListView = (ListView)  rootview.findViewById(R.id.home_obstacles_listview);
+        obstacleListView = rootview.findViewById(R.id.home_obstacles_listview);
         obstaclesListViewAdapter = new ObstaclesListViewAdapter(getContext(), R.layout.home_obstacle_list_layout, obstacleListItemList);
         obstacleListView.setAdapter(obstaclesListViewAdapter);
+        refreshObstacleListHeight();
+
+        //Theme toggle
+        themeSwitch = rootview.findViewById(R.id.switch_theme);
+        if (themeSwitch != null) {
+            boolean isDarkMode = ThemeUtils.isDarkModeEnabled(requireContext());
+            themeSwitch.setChecked(isDarkMode);
+            themeSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> ThemeUtils.setDarkMode(requireContext(), isChecked));
+        }
 
         //Switches
         manualModeSwitch = (Switch) rootview.findViewById(R.id.switch_manualMode);
         outdoorArenaSwitch = (Switch) rootview.findViewById(R.id.switch_outdoor);
         turningModeSwitch = (Switch) rootview.findViewById(R.id.switch_turnmode);
+
+        if(sharedPreferences == null && getContext() != null){
+            sharedPreferences = requireContext().getSharedPreferences(RobotControllerActions.PREFS_NAME, Context.MODE_PRIVATE);
+        }
+
+        boolean savedOutdoorArena = false;
+        boolean savedBigTurn = false;
+        if(sharedPreferences != null){
+            savedOutdoorArena = sharedPreferences.getBoolean(RobotControllerActions.PREF_OUTDOOR, false);
+            savedBigTurn = sharedPreferences.getBoolean(RobotControllerActions.PREF_BIG_TURN, false);
+        }
+
+        outdoorArenaSwitch.setChecked(savedOutdoorArena);
+        turningModeSwitch.setChecked(savedBigTurn);
+        gridMap.setIsOutdoorArena(savedOutdoorArena);
 
         manualModeSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
@@ -177,7 +216,21 @@ public class HomeFragment extends Fragment{
         outdoorArenaSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                gridMap.setIsOutdoorArena(isChecked);
+                if (gridMap != null) {
+                    gridMap.setIsOutdoorArena(isChecked);
+                }
+                if(sharedPreferences != null){
+                    sharedPreferences.edit().putBoolean(RobotControllerActions.PREF_OUTDOOR, isChecked).apply();
+                }
+            }
+        });
+
+        turningModeSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if(sharedPreferences != null){
+                    sharedPreferences.edit().putBoolean(RobotControllerActions.PREF_BIG_TURN, isChecked).apply();
+                }
             }
         });
 
@@ -193,63 +246,10 @@ public class HomeFragment extends Fragment{
         ImageButton controlBtnLeft = rootview.findViewById(R.id.leftArrowBtn);
         ImageButton controlBtnRight = rootview.findViewById(R.id.rightArrowBtn);
 
-        controlBtnUp.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                if(event.getAction() == MotionEvent.ACTION_DOWN) {
-                    sendDirectionCmdIntent("FW--");
-
-                } else if (event.getAction() == MotionEvent.ACTION_UP) {
-                    sendDirectionCmdIntent("STOP");
-                }
-
-                return true;
-            }
-        });
-
-        //CONTROL BUTTON: Reverse
-        controlBtnDown.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                if(event.getAction() == MotionEvent.ACTION_DOWN) {
-                    sendDirectionCmdIntent("BW--");
-
-                } else if (event.getAction() == MotionEvent.ACTION_UP) {
-                    sendDirectionCmdIntent("STOP");
-                }
-
-                return true;
-            }
-        });
-
-        //CONTROL BUTTON: Left
-        controlBtnLeft.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                if(event.getAction() == MotionEvent.ACTION_DOWN) {
-                    sendDirectionCmdIntent("TL--");
-
-                } else if (event.getAction() == MotionEvent.ACTION_UP) {
-                    sendDirectionCmdIntent("STOP");
-                }
-
-                return true;
-            }
-        });
-
-        //CONTROL BUTTON: Right
-        controlBtnRight.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                if(event.getAction() == MotionEvent.ACTION_DOWN) {
-                    sendDirectionCmdIntent("TR--");
-
-                } else if (event.getAction() == MotionEvent.ACTION_UP) {
-                    sendDirectionCmdIntent("STOP");
-                }
-                return true;
-            }
-        });
+        attachManualControlListener(controlBtnUp, "FW--");
+        attachManualControlListener(controlBtnDown, "BW--");
+        attachManualControlListener(controlBtnLeft, "TL--");
+        attachManualControlListener(controlBtnRight, "TR--");
 
         //TIME TAKEN TEXTVIEW
         txtTimeTaken = rootview.findViewById(R.id.txt_timeTaken);
@@ -272,11 +272,15 @@ public class HomeFragment extends Fragment{
 
         // OnClickListeners for sending arena info to RPI
         btnSendArenaInfo.setOnClickListener(v->{
-            gridMap.sendUpdatedObstacleInformation();
+            if (gridMap != null) {
+                gridMap.sendUpdatedObstacleInformation();
+            }
         });
 
         btnSendStartImageRec.setOnClickListener(v->{
-            gridMap.removeAllTargetIDs();
+            if (gridMap != null) {
+                gridMap.removeAllTargetIDs();
+            }
             txtTimeTaken.setVisibility(View.INVISIBLE);
             sendControlCmdIntent("start");
             timeStarted = System.nanoTime();
@@ -289,30 +293,16 @@ public class HomeFragment extends Fragment{
         });
 
         btnSendStartFastestCar.setOnClickListener(v->{
-            txtTimeTaken.setVisibility(View.INVISIBLE);
-            timeStarted = System.nanoTime();
-
-            boolean isBigTurn = turningModeSwitch.isChecked();
-            boolean isOutdoor = outdoorArenaSwitch.isChecked();
-
-            if(isBigTurn){
-                if(isOutdoor){
-                    sendTurningModeCmdIntent("WN04");
-                }else{
-                    sendTurningModeCmdIntent("WN02");
-                }
-            }else{
-                if(isOutdoor){
-                    sendTurningModeCmdIntent("WN03");
-                }else{
-                    sendTurningModeCmdIntent("WN01");
-                }
-            }
+            boolean isBigTurn = turningModeSwitch != null && turningModeSwitch.isChecked();
+            boolean isOutdoor = outdoorArenaSwitch != null && outdoorArenaSwitch.isChecked();
+            startFastestCar(isBigTurn, isOutdoor);
         });
 
         btnResetArena.setOnClickListener(v->{
             try{
-                gridMap.resetMap();
+                if (gridMap != null) {
+                    gridMap.resetMap();
+                }
             }catch (Exception e){
                 Log.e(TAG, "onCreateView: An error occured while resetting map");
                 e.printStackTrace();
@@ -325,7 +315,9 @@ public class HomeFragment extends Fragment{
                 //New status
                 placingRobot = !placingRobot;
                 if(placingRobot){
-                    gridMap.setStartCoordStatus(placingRobot);
+                    if (gridMap != null) {
+                        gridMap.setStartCoordStatus(placingRobot);
+                    }
                     btnPlaceRobot.setText("Stop Set Robot");
 
                     //Disable other buttons
@@ -335,7 +327,9 @@ public class HomeFragment extends Fragment{
                     btnSendStartFastestCar.setEnabled(false);
                     btnSendStartImageRec.setEnabled(false);
                 }else{
-                    gridMap.setStartCoordStatus(placingRobot);
+                    if (gridMap != null) {
+                        gridMap.setStartCoordStatus(placingRobot);
+                    }
                     btnSetObstacle.setEnabled(true);
                     btnSetFacing.setEnabled(true);
                     btnResetArena.setEnabled(true);
@@ -353,7 +347,9 @@ public class HomeFragment extends Fragment{
             try{
                 settingObstacle = !settingObstacle;
                 if(settingObstacle){
-                    gridMap.setSetObstacleStatus(settingObstacle);
+                    if (gridMap != null) {
+                        gridMap.setSetObstacleStatus(settingObstacle);
+                    }
                     btnSetObstacle.setText("Stop Set Obstacle");
 
                     //Disable other buttons
@@ -363,7 +359,9 @@ public class HomeFragment extends Fragment{
                     btnSendStartFastestCar.setEnabled(false);
                     btnSendStartImageRec.setEnabled(false);
                 }else{
-                    gridMap.setSetObstacleStatus(settingObstacle);
+                    if (gridMap != null) {
+                        gridMap.setSetObstacleStatus(settingObstacle);
+                    }
                     btnSetObstacle.setText("Set Obstacle");
 
                     //Re-enable other buttons
@@ -393,7 +391,9 @@ public class HomeFragment extends Fragment{
                     btnSendStartFastestCar.setEnabled(false);
                     btnSendStartImageRec.setEnabled(false);
                 }else{
-                    gridMap.setSetDirection(settingDir);
+                    if (gridMap != null) {
+                        gridMap.setSetDirection(settingDir);
+                    }
                     btnSetFacing.setText("Set Facing");
 
                     //Reenable other buttons
@@ -419,7 +419,9 @@ public class HomeFragment extends Fragment{
                     int y_value_int = Integer.parseInt(y_value);
 
                     if( x_value_int < 20 && x_value_int >=0 && y_value_int < 20 && y_value_int >=0){
-                        gridMap.setObstacleCoord(x_value_int, y_value_int);
+                        if (gridMap != null) {
+                            gridMap.setObstacleCoord(x_value_int, y_value_int);
+                        }
                         showShortToast("Added obstacle");
                         addObs_x.setText("");
                         addObs_y.setText("");
@@ -452,6 +454,51 @@ public class HomeFragment extends Fragment{
          */
         // Inflate the layout for this fragment
         return rootview;
+    }
+    @Override
+    public void onDestroyView() {
+        super.onDestroyView();
+        gridMap = null;
+    }
+
+    private void startFastestCar(boolean isBigTurn, boolean isOutdoor){
+        if(txtTimeTaken != null){
+            txtTimeTaken.setVisibility(View.INVISIBLE);
+        }
+        timeStarted = System.nanoTime();
+
+        if(sharedPreferences != null){
+            boolean storedBigTurn = sharedPreferences.getBoolean(RobotControllerActions.PREF_BIG_TURN, false);
+            boolean storedOutdoor = sharedPreferences.getBoolean(RobotControllerActions.PREF_OUTDOOR, false);
+            if(storedBigTurn != isBigTurn || storedOutdoor != isOutdoor){
+                sharedPreferences.edit()
+                        .putBoolean(RobotControllerActions.PREF_BIG_TURN, isBigTurn)
+                        .putBoolean(RobotControllerActions.PREF_OUTDOOR, isOutdoor)
+                        .apply();
+            }
+        }
+
+        if(turningModeSwitch != null && turningModeSwitch.isChecked() != isBigTurn){
+            turningModeSwitch.setChecked(isBigTurn);
+        }
+
+        if(outdoorArenaSwitch != null && outdoorArenaSwitch.isChecked() != isOutdoor){
+            outdoorArenaSwitch.setChecked(isOutdoor);
+        }
+
+        if(isBigTurn){
+            if(isOutdoor){
+                sendTurningModeCmdIntent("WN04");
+            }else{
+                sendTurningModeCmdIntent("WN02");
+            }
+        }else{
+            if(isOutdoor){
+                sendTurningModeCmdIntent("WN03");
+            }else{
+                sendTurningModeCmdIntent("WN01");
+            }
+        }
     }
 
     private BroadcastReceiver roboStatusUpdateReceiver = new BroadcastReceiver() {
@@ -533,6 +580,17 @@ public class HomeFragment extends Fragment{
         }
     };
 
+    private final BroadcastReceiver startFastestCarReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            boolean isBigTurn = intent.getBooleanExtra(RobotControllerActions.EXTRA_BIG_TURN,
+                    turningModeSwitch != null && turningModeSwitch.isChecked());
+            boolean isOutdoor = intent.getBooleanExtra(RobotControllerActions.EXTRA_OUTDOOR,
+                    outdoorArenaSwitch != null && outdoorArenaSwitch.isChecked());
+            startFastestCar(isBigTurn, isOutdoor);
+        }
+    };
+
     private BroadcastReceiver updateObstalceListReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -544,6 +602,7 @@ public class HomeFragment extends Fragment{
                     obstacleListItemList.add(new ObstacleListItem(obj.getInt("no"), obj.getInt("x"),obj.getInt("y"),obj.getString("facing")));
                 }
                 obstaclesListViewAdapter.updateList(obstacleListItemList);
+                refreshObstacleListHeight();
             }catch (Exception ex){
                 Log.e(TAG, "onReceive: An error occured while updating obstacle list view");
                 ex.printStackTrace();
@@ -581,7 +640,9 @@ public class HomeFragment extends Fragment{
                     return;
                 }
 
-                gridMap.updateCurCoord(xCoord, yCoord, direction);
+                if (gridMap != null) {
+                    gridMap.updateCurCoord(xCoord, yCoord, direction);
+                }
             }catch (Exception e){
                 showShortToast("Error updating robot location");
                 Log.e(TAG, "onReceive: An error occured while updating robot location");
@@ -597,7 +658,9 @@ public class HomeFragment extends Fragment{
                 JSONObject msgJSON = new JSONObject(intent.getStringExtra("msg"));
                 int obstacleID = Integer.parseInt(msgJSON.getString("obstacle_id"));
                 String targetID = msgJSON.getString("image_id");
-                gridMap.updateImageNumberCell(obstacleID, targetID);
+                if (gridMap != null) {
+                    gridMap.updateImageNumberCell(obstacleID, targetID);
+                }
             }catch (Exception e){
                 showShortToast("Error updating image rec result");
                 Log.e(TAG, "onReceive: An error occured while upating the image rec result");
@@ -612,6 +675,32 @@ public class HomeFragment extends Fragment{
 
     private void showLongToast(String msg) {
         Toast.makeText(getActivity(), msg, Toast.LENGTH_LONG).show();
+    }
+
+    private void attachManualControlListener(ImageButton button, String forwardCommand) {
+        button.setOnTouchListener((v, event) -> {
+            int action = event.getAction();
+            if (action == MotionEvent.ACTION_DOWN) {
+                v.setPressed(true);
+                sendDirectionCmdIntent(forwardCommand);
+                return true;
+            }
+
+            if (action == MotionEvent.ACTION_UP) {
+                v.setPressed(false);
+                sendDirectionCmdIntent("STOP");
+                v.performClick();
+                return true;
+            }
+
+            if (action == MotionEvent.ACTION_CANCEL) {
+                v.setPressed(false);
+                sendDirectionCmdIntent("STOP");
+                return true;
+            }
+
+            return false;
+        });
     }
 
     private void sendDirectionCmdIntent(String direction){
@@ -677,6 +766,38 @@ public class HomeFragment extends Fragment{
         LocalBroadcastManager.getInstance(getContext()).sendBroadcast(sendBTIntent);
     }
 
+    private void refreshObstacleListHeight() {
+        if (obstacleListView == null) {
+            return;
+        }
+
+        obstacleListView.post(() -> {
+            ListAdapter adapter = obstacleListView.getAdapter();
+            if (adapter == null) {
+                return;
+            }
+
+            int totalHeight = 0;
+            int widthMeasureSpec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
+            for (int i = 0; i < adapter.getCount(); i++) {
+                View listItem = adapter.getView(i, null, obstacleListView);
+                listItem.measure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+                totalHeight += listItem.getMeasuredHeight();
+            }
+
+            int dividerHeight = obstacleListView.getDividerHeight();
+            if (dividerHeight < 0) {
+                dividerHeight = 0;
+            }
+            totalHeight += dividerHeight * Math.max(adapter.getCount() - 1, 0);
+
+            ViewGroup.LayoutParams params = obstacleListView.getLayoutParams();
+            params.height = totalHeight;
+            obstacleListView.setLayoutParams(params);
+            obstacleListView.requestLayout();
+        });
+    }
+
     private class ObstaclesListViewAdapter extends ArrayAdapter<ObstacleListItem>{
         private List<ObstacleListItem> items;
 
@@ -698,14 +819,17 @@ public class HomeFragment extends Fragment{
             }
             ObstacleListItem item = items.get(position);
             TextView obsNoTxt = (TextView) convertView.findViewById(R.id.txtObsListItem_obsNo);
-            TextView xPosTxt = (TextView) convertView.findViewById(R.id.txtObsListItem_x);
-            TextView yPosTxt = (TextView) convertView.findViewById(R.id.txtObsListItem_y);
+            TextView coordinatesTxt = (TextView) convertView.findViewById(R.id.txtObsListItem_coordinates);
             TextView facingTxt = (TextView) convertView.findViewById(R.id.txtObsListItem_dir);
 
-            obsNoTxt.setText("#"+item.obsNo);
-            xPosTxt.setText(Integer.toString(item.x));
-            yPosTxt.setText(Integer.toString(item.y));
-            facingTxt.setText(item.facing);
+            Locale locale = Locale.getDefault();
+            obsNoTxt.setText(String.format(locale, "Obstacle #%02d", item.obsNo));
+            coordinatesTxt.setText(String.format(locale, "Coordinates: (%02d, %02d)", item.x, item.y));
+
+            String facingValue = item.facing == null || item.facing.trim().isEmpty()
+                    ? "--"
+                    : item.facing;
+            facingTxt.setText(facingValue.toUpperCase(locale));
 
             return convertView;
         }

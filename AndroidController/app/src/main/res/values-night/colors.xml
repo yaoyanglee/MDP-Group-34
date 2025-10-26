@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF4285F4</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="grey">#2a375f</color>
+
+    <color name="androidGreenColor">#3ddc84</color>
+    <color name="primaryLightGreenColor">#5ecb90</color>
+    <color name="colorBlack">#636363</color>
+    <color name="primaryColorGreen">#92ffc0</color>
+    <color name="red">#ff0000</color>
+
+    <!-- Robot car inspired palette (dark mode) -->
+    <color name="spaceBlack">#080C1A</color>
+    <color name="panelDark">#101C3C</color>
+    <color name="panelStroke">#27446B</color>
+    <color name="trackBlue">#1D4ED8</color>
+    <color name="neonCyan">#3DFFE7</color>
+    <color name="neonAmber">#FF8A4C</color>
+    <color name="textPrimary">#F8FAFF</color>
+    <color name="textSecondary">#A6B7E8</color>
+    <color name="chipOverlay">#333DFFE7</color>
+    <color name="listItemBackground">#162753</color>
+    <color name="backgroundGradientStart">#080C1A</color>
+    <color name="backgroundGradientCenter">#13244F</color>
+    <color name="backgroundGradientEnd">#05070F</color>
+</resources>

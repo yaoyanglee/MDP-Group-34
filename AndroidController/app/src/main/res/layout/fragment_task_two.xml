@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_home_gradient"
+    android:padding="24dp"
+    tools:context=".TaskTwoFragment">
+
+    <TextView
+        android:id="@+id/txtTaskTwoTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:letterSpacing="0.08"
+        android:text="Task 2"
+        android:textAllCaps="true"
+        android:textColor="@color/neonCyan"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/taskTwoActionCard"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="32dp"
+        android:layout_marginBottom="32dp"
+        app:cardBackgroundColor="@color/panelDark"
+        app:cardCornerRadius="32dp"
+        app:cardUseCompatPadding="true"
+        app:strokeColor="@color/panelStroke"
+        app:strokeWidth="1dp"
+        app:layout_constraintBottom_toTopOf="@+id/txtTaskTwoHint"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/txtTaskTwoTitle">
+
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <ImageButton
+                android:id="@+id/btnTaskTwoStartFastestCar"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:background="@drawable/rounded_button"
+                android:scaleType="fitCenter"
+                android:adjustViewBounds="true"
+                android:src="@drawable/ic_start_toggle"
+                android:contentDescription="Start Fastest Car"
+                android:backgroundTint="@android:color/transparent"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent" />
+        </androidx.constraintlayout.widget.ConstraintLayout>
+
+    </com.google.android.material.card.MaterialCardView>
+
+    <TextView
+        android:id="@+id/txtTaskTwoHint"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Task 2 reuses the Task 1 configuration. Update Big Turn and Outdoor Arena toggles in Task 1 before launching."
+        android:textColor="@color/textSecondary"
+        android:textSize="14sp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

@@ -1,77 +1,72 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:padding="4dp">
 
     <LinearLayout
         android:id="@+id/home_obs_listitem_layout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginVertical="4dp"
+        android:background="@drawable/bg_list_item"
         android:gravity="center_vertical"
+        android:minHeight="72dp"
         android:orientation="horizontal"
-        tools:layout_editor_absoluteX="1dp"
-        tools:layout_editor_absoluteY="1dp"
+        android:padding="12dp"
         android:weightSum="10">
 
         <ImageView
             android:id="@+id/imageView"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_weight="0.5"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginEnd="12dp"
+            android:contentDescription="Obstacle icon"
+            android:tint="@color/neonCyan"
             app:srcCompat="@drawable/ic_baseline_gps_fixed_24" />
 
-        <TextView
-            android:id="@+id/txtObsListItem_obsNo"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="0.5"
-            android:text="#1"
-            android:textSize="17sp"
-            android:textStyle="bold" />
+            android:layout_weight="7"
+            android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/txtObsListItem_xTxtView"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="X:"
-            android:textStyle="bold" />
+            <TextView
+                android:id="@+id/txtObsListItem_obsNo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="#01"
+                android:textColor="@color/textPrimary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
 
-        <TextView
-            android:id="@+id/txtObsListItem_x"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_weight="1" />
-
-        <TextView
-            android:id="@+id/txtObsListItem_yTxtView"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Y:"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/txtObsListItem_y"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_weight="1" />
-
-        <TextView
-            android:id="@+id/txtObsListItem_dirTxtView"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Facing:"
-            android:textStyle="bold" />
+            <TextView
+                android:id="@+id/txtObsListItem_coordinates"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Coordinates: (00, 00)"
+                android:textColor="@color/textSecondary"
+                android:textSize="13sp" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/txtObsListItem_dir"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="" />
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_info_chip"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:text="NORTH"
+            android:textAllCaps="true"
+            android:textColor="@color/textPrimary"
+            android:textSize="12sp"
+            android:textStyle="bold" />
     </LinearLayout>
-</androidx.constraintlayout.widget.ConstraintLayout>
+</LinearLayout>

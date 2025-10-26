@@ -12,6 +12,7 @@ import android.util.AttributeSet;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewParent;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -73,6 +74,8 @@ public class GridMap extends View {
 
     private static int[] selectedObsCoord = new int[3];
     private static boolean obsSelected = false;
+    private boolean parentInterceptDisabled = false;
+
     private static ArrayList<Cell> oCellArr = new ArrayList<Cell>();
 
     int switchDirection = -1; // 0:None 1: Up, 2: Down, 3: Left, 4:Right
@@ -567,6 +570,7 @@ public class GridMap extends View {
             if (!robotSelected && selectedCell != null) {
                 if (Math.abs(robotX - mapX) <= touchTolerance && Math.abs(robotY - mapY) <= touchTolerance) {
                     robotSelected = true;
+                    setParentShouldIntercept(false);
                     return true;
                 }
             }
@@ -591,60 +595,113 @@ public class GridMap extends View {
                         selectedObsCoord[0] = mapX;
                         selectedObsCoord[1] = mapY;
                         obsSelected = true;
+                        setParentShouldIntercept(false);
                         return true;
                     }
             }
-        }else if(event.getAction() == MotionEvent.ACTION_UP){
+        }else if(event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL){
             //Reset obs selected when finger is lifted from map
             if (obsSelected) {
                 obsSelected = false;
                 Log.d("obsSelected", Boolean.toString(obsSelected));
+                setParentShouldIntercept(true);
                 return true;
             }
             if (robotSelected) {
                 robotSelected = false;
+                setParentShouldIntercept(true);
                 return true;
             }
+            setParentShouldIntercept(true);
         }else if(event.getAction() == MotionEvent.ACTION_MOVE){
             if (obsSelected) {
-                boolean occupied = false;
-                for (int i = 0; i < obstacleCoords.size(); i++) {
-                    if (obstacleCoords.get(i)[0] == mapX && obstacleCoords.get(i)[1] == mapY) {
-                        occupied = true;
-                    }
-                }
-                if (occupied == false) {
-                    Cell oldObstacleCell = getCellAtMapCoord(selectedObsCoord[0], selectedObsCoord[1]);
-                    //Cache old obstacle direction
-                    Direction oldObstacleDir = oldObstacleCell.obstacleFacing;
-                    String oldTargetID = oldObstacleCell.targetID;
-                    removeObstacleCoord(selectedObsCoord[0], selectedObsCoord[1]);
-
-                    //If selection is within the grid; move to new position
-                    if (mapX < 20 && mapY < 20 && mapX > 0 && mapY > 0) {
-                        //Update selectedObsCoord;
-                        selectedObsCoord[0] = mapX;
-                        selectedObsCoord[1] = mapY;
-
-                        setObstacleCoord(mapX,mapY);
-                        selectedCell.obstacleFacing = oldObstacleDir;
-                        selectedCell.targetID = oldTargetID;
-                    }
-                    this.invalidate();
+                int originX = selectedObsCoord[0];
+                int originY = selectedObsCoord[1];
+                if (!isWithinGrid(mapX, mapY)) {
+                    removeObstacleCoord(originX, originY);
+                    clearSelectedObstacle();
+                    setParentShouldIntercept(true);
                     return true;
                 }
 
+                Cell oldObstacleCell = getCellAtMapCoord(originX, originY);
+                //Cache old obstacle data
+                Direction oldObstacleDir = oldObstacleCell.obstacleFacing;
+                String oldTargetID = oldObstacleCell.targetID;
+                int oldObstacleNo = oldObstacleCell.obstacleNo;
+
+                removeObstacleCoord(originX, originY);
+
+                placeObstacleWithMetadata(mapX, mapY, oldObstacleNo, oldObstacleDir, oldTargetID);
+
+                selectedObsCoord[0] = mapX;
+                selectedObsCoord[1] = mapY;
+                this.invalidate();
+                return true;
             }
             if (robotSelected) {
                 if (mapX >= 0 && mapX < COL && mapY >= 0 && mapY < ROW) {
                     updateCurCoord(mapX, mapY, robotDirection);  // move robot
                     invalidate();
                 }
+                setParentShouldIntercept(true);
                 return true;
             }
         }
         showLog("Exiting onTouchEvent");
         return false;
+    }
+
+    private void setParentShouldIntercept(boolean shouldIntercept) {
+        boolean disallowIntercept = !shouldIntercept;
+        if (parentInterceptDisabled == disallowIntercept) {
+            return;
+        }
+
+        ViewParent parent = getParent();
+        if (parent != null) {
+            parent.requestDisallowInterceptTouchEvent(disallowIntercept);
+        }
+
+        parentInterceptDisabled = disallowIntercept;
+    }
+
+    private boolean isWithinGrid(int mapX, int mapY) {
+        return mapX >= 0 && mapX < COL && mapY >= 0 && mapY < ROW;
+    }
+
+    private boolean isCellOccupied(int mapX, int mapY, int ignoreX, int ignoreY) {
+        for (int[] coord : obstacleCoords) {
+            if (coord[0] == mapX && coord[1] == mapY) {
+                if (coord[0] != ignoreX || coord[1] != ignoreY) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    private void clearSelectedObstacle() {
+        obsSelected = false;
+        selectedObsCoord[0] = -1;
+        selectedObsCoord[1] = -1;
+        selectedObsCoord[2] = -1;
+    }
+
+    private void placeObstacleWithMetadata(int mapX, int mapY, int obstacleNo, Direction facing, String targetId) {
+        int[] obstacleCoord = new int[]{mapX, mapY};
+        obstacleCoords.add(obstacleCoord);
+
+        Cell newObsCell = getCellAtMapCoord(mapX, mapY);
+        newObsCell.setType(CellType.OBSTACLE);
+        newObsCell.obstacleNo = obstacleNo;
+        newObsCell.obstacleFacing = facing;
+        newObsCell.targetID = targetId;
+
+        if (obstacleNo > 0 && obstacleNo <= obstacleNoArray.length) {
+            obstacleNoArray[obstacleNo - 1] = -1;
+        }
+
+        updateHomeObstacleListView();
     }
 
     private void startFacingSelection(Cell selectedCell) {
@@ -745,6 +802,21 @@ public class GridMap extends View {
 
         // newly added
         obstacleNoArray = new int[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+
+        if (cells != null) {
+            for (int x = 1; x <= COL; x++) {
+                for (int y = 1; y <= ROW; y++) {
+                    Cell cell = cells[x][y];
+                    if (cell.type != CellType.BORDER) {
+                        cell.setType(CellType.UNEXPLORED);
+                    }
+                    cell.setobstacleFacing(Direction.NONE);
+                    cell.targetID = null;
+                    cell.obstacleNo = -1;
+                    cell.setId(-1);
+                }
+            }
+        }
 
         updateHomeObstacleListView();
         showLog("Exiting resetMap");
