@@ -27,7 +27,7 @@ SYMBOL_MAP = {
     "Z": "Z",
     "up": "Up Arrow",
     "down": "Down Arrow",
-    "right": "Right Arrow",
-    "left": "Left Arrow",
+    "Right": "Right Arrow",
+    "Left": "Left Arrow",
     "circle": "Stop"
 }

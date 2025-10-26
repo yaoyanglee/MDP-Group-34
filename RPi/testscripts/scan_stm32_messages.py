@@ -67,15 +67,17 @@ class STM32MessageScanner:
         
         # Check for valid command patterns (XXYYYY format)
         valid_patterns = [
-            r'^\d{2}FW\d{2}$',    # XXFW followed by 2 digits
-            r'^\d{2}BW\d{2}$',    # XXBW followed by 2 digits
-            r'^\d{2}FL\d{2}$',    # XXFL followed by 2 digits
-            r'^\d{2}FR\d{2}$',    # XXFR followed by 2 digits
-            r'^\d{2}FW--$',       # XXFW--
-            r'^\d{2}BW--$',       # XXBW--
-            r'^\d{2}FL90$',       # XXFL90
-            r'^\d{2}FR90$',       # XXFR90
-            r'^\d{2}STOP$',       # XXSTOP
+            r'^\d{2}FW\d{3}$',    # XXFW followed by 2 digits
+            r'^\d{2}BW\d{3}$',    # XXBW followed by 2 digits
+            r'^\d{2}FL\d{3}$',    # XXFL followed by 2 digits
+            r'^\d{2}FR\d{3}$',    # XXFR followed by 2 digits
+            r'^\d{2}FW---$',       # XXFW--
+            r'^\d{2}BW---$',       # XXBW--
+            r'^\d{2}FL090$',       # XXFL90
+            r'^\d{2}FR090$',       # XXFR90
+            r'^\d{2}BR090$',       # XXFR90
+            r'^\d{2}BL090$',       # XXFR90
+            r'^\d{2}STOP-$',       # XXSTOP
             r'^\d{2}TEST$',       # XXTEST
             # Legacy format support
             r'^FW\d{2}$',         # FW followed by 2 digits

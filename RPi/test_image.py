@@ -24,7 +24,6 @@ try:
     while True:
         # Capture frame as array
         frame = picam2.capture_array()
-        
         # Encode to JPEG in-memory
         ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         if not ret:
