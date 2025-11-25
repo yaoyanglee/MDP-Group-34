@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/neonCyan">
+
+    <item>
+        <selector>
+            <!-- Pressed state -->
+            <item android:state_pressed="true">
+                <shape android:shape="oval">
+                    <solid android:color="@color/neonCyan" />
+                    <stroke
+                        android:width="2dp"
+                        android:color="@color/white" />
+                </shape>
+            </item>
+
+            <!-- Default state -->
+            <item>
+                <shape android:shape="oval">
+                    <solid android:color="@color/spaceBlack" />
+                    <stroke
+                        android:width="2dp"
+                        android:color="@color/neonCyan" />
+                </shape>
+            </item>
+        </selector>
+    </item>
+</ripple>
